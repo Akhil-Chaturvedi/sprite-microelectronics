@@ -1,0 +1,357 @@
+"""
+Sprite One - Python Host Library
+Week 4 Day 23: Easy Protocol Control
+
+Simple Python library for controlling Sprite One via serial.
+Supports all graphics and AI commands.
+
+Usage:
+    from sprite_one import SpriteOne
+    
+    sprite = SpriteOne('/dev/ttyUSB0')  # or 'COM3' on Windows
+    
+    # Train AI model
+    sprite.ai_train(epochs=100)
+    
+    # Run inference
+    result = sprite.ai_infer(1.0, 0.0)
+    print(f"1 XOR 0 = {result}")
+    
+    # Graphics
+    sprite.clear()
+    sprite.rect(10, 10, 50, 30)
+    sprite.flush()
+"""
+
+import serial
+import struct
+import time
+from typing import Optional, List, Tuple
+
+# Protocol constants
+SPRITE_HEADER = 0xAA
+SPRITE_ACK = 0x00
+SPRITE_NAK = 0x01
+
+# Command codes
+CMD_VERSION = 0x0F
+CMD_CLEAR = 0x10
+CMD_PIXEL = 0x11
+CMD_RECT = 0x12
+CMD_TEXT = 0x21
+CMD_FLUSH = 0x2F
+
+CMD_AI_INFER = 0x50
+CMD_AI_TRAIN = 0x51
+CMD_AI_STATUS = 0x52
+CMD_AI_SAVE = 0x53
+CMD_AI_LOAD = 0x54
+CMD_AI_LIST = 0x55
+CMD_AI_DELETE = 0x56
+
+# Response codes
+RESP_OK = 0x00
+RESP_ERROR = 0x01
+RESP_NOT_FOUND = 0x02
+RESP_BUSY = 0x03
+
+
+class SpriteOneError(Exception):
+    """Exception raised for Sprite One communication errors."""
+    pass
+
+
+class SpriteOne:
+    """
+    Sprite One host library.
+    
+    Provides high-level interface to Sprite One graphics and AI accelerator.
+    """
+    
+    def __init__(self, port: str, baudrate: int = 115200, timeout: float = 2.0):
+        """
+        Initialize connection to Sprite One.
+        
+        Args:
+            port: Serial port (e.g., 'COM3', '/dev/ttyUSB0')
+            baudrate: Serial baudrate (default: 115200)
+            timeout: Read timeout in seconds (default: 2.0)
+        """
+        self.ser = serial.Serial(port, baudrate, timeout=timeout)
+        time.sleep(0.1)  # Allow device to stabilize
+        
+    def close(self):
+        """Close serial connection."""
+        if self.ser and self.ser.is_open:
+            self.ser.close()
+    
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+    
+    def _send_command(self, cmd: int, payload: bytes = b'') -> Tuple[int, bytes]:
+        """
+        Send command and receive response.
+        
+        Args:
+            cmd: Command code
+            payload: Command payload bytes
+            
+        Returns:
+            Tuple of (status_code, response_data)
+        """
+        # Build packet
+        packet = bytes([SPRITE_HEADER, cmd, len(payload)]) + payload
+        packet += bytes([self._checksum(payload)])
+        
+        # Send
+        self.ser.write(packet)
+        
+        # Read response header
+        header = self.ser.read(4)
+        if len(header) < 4:
+            raise SpriteOneError("Timeout waiting for response")
+        
+        if header[0] != SPRITE_HEADER:
+            raise SpriteOneError(f"Invalid response header: 0x{header[0]:02X}")
+        
+        resp_cmd = header[1]
+        resp_status = header[2]
+        resp_len = header[3]
+        
+        # Read data
+        resp_data = b''
+        if resp_len > 0:
+            resp_data = self.ser.read(resp_len)
+            if len(resp_data) < resp_len:
+                raise SpriteOneError("Incomplete response data")
+        
+        # Read checksum (ignored for now)
+        self.ser.read(1)
+        
+        return resp_status, resp_data
+    
+    def _checksum(self, data: bytes) -> int:
+        """Calculate simple checksum."""
+        return (~sum(data) + 1) & 0xFF
+    
+    # ===== System Commands =====
+    
+    def get_version(self) -> Tuple[int, int, int]:
+        """
+        Get firmware version.
+        
+        Returns:
+            Tuple of (major, minor, patch)
+        """
+        status, data = self._send_command(CMD_VERSION)
+        if status != RESP_OK or len(data) < 3:
+            raise SpriteOneError(f"Version command failed: status={status}")
+        return data[0], data[1], data[2]
+    
+    # ===== Graphics Commands =====
+    
+    def clear(self, color: int = 0):
+        """Clear display to color."""
+        status, _ = self._send_command(CMD_CLEAR, bytes([color]))
+        if status != RESP_OK:
+            raise SpriteOneError(f"Clear failed: status={status}")
+    
+    def pixel(self, x: int, y: int, color: int = 1):
+        """Draw single pixel."""
+        payload = struct.pack('<HHB', x, y, color)
+        status, _ = self._send_command(CMD_PIXEL, payload)
+        if status != RESP_OK:
+            raise SpriteOneError(f"Pixel failed: status={status}")
+    
+    def rect(self, x: int, y: int, w: int, h: int, color: int = 1):
+        """Draw filled rectangle."""
+        payload = struct.pack('<HHHHB', x, y, w, h, color)
+        status, _ = self._send_command(CMD_RECT, payload)
+        if status != RESP_OK:
+            raise SpriteOneError(f"Rect failed: status={status}")
+    
+    def text(self, x: int, y: int, text: str, color: int = 1):
+        """Draw text string."""
+        text_bytes = text.encode('ascii')
+        payload = struct.pack('<HHB', x, y, color) + text_bytes
+        status, _ = self._send_command(CMD_TEXT, payload)
+        if status != RESP_OK:
+            raise SpriteOneError(f"Text failed: status={status}")
+    
+    def flush(self):
+        """Flush framebuffer to display."""
+        status, _ = self._send_command(CMD_FLUSH)
+        if status != RESP_OK:
+            raise SpriteOneError(f"Flush failed: status={status}")
+    
+    # ===== AI Commands =====
+    
+    def ai_infer(self, input0: float, input1: float) -> float:
+        """
+        Run inference on loaded model.
+        
+        Args:
+            input0: First input value
+            input1: Second input value
+            
+        Returns:
+            Output value
+        """
+        payload = struct.pack('<ff', input0, input1)
+        status, data = self._send_command(CMD_AI_INFER, payload)
+        
+        if status == RESP_NOT_FOUND:
+            raise SpriteOneError("No model loaded")
+        elif status != RESP_OK:
+            raise SpriteOneError(f"Inference failed: status={status}")
+        
+        if len(data) < 4:
+            raise SpriteOneError("Invalid inference response")
+        
+        return struct.unpack('<f', data[:4])[0]
+    
+    def ai_train(self, epochs: int = 100) -> float:
+        """
+        Train AI model.
+        
+        Args:
+            epochs: Number of training epochs
+            
+        Returns:
+            Final loss value
+        """
+        payload = bytes([epochs])
+        status, data = self._send_command(CMD_AI_TRAIN, payload)
+        
+        if status != RESP_OK:
+            raise SpriteOneError(f"Training failed: status={status}")
+        
+        if len(data) >= 4:
+            return struct.unpack('<f', data[:4])[0]
+        return 0.0
+    
+    def ai_status(self) -> dict:
+        """
+        Get AI engine status.
+        
+        Returns:
+            Dictionary with status information
+        """
+        status, data = self._send_command(CMD_AI_STATUS)
+        
+        if status != RESP_OK:
+            raise SpriteOneError(f"Status command failed: status={status}")
+        
+        if len(data) < 8:
+            return {}
+        
+        state = data[0]
+        loaded = bool(data[1])
+        epochs = struct.unpack('<H', data[2:4])[0]
+        loss = struct.unpack('<f', data[4:8])[0] if len(data) >= 8 else 0.0
+        
+        return {
+            'state': state,
+            'model_loaded': loaded,
+            'epochs': epochs,
+            'last_loss': loss
+        }
+    
+    def ai_save(self, filename: str = "/model.aif32"):
+        """Save current model to flash."""
+        payload = filename.encode('ascii')
+        status, _ = self._send_command(CMD_AI_SAVE, payload)
+        
+        if status != RESP_OK:
+            raise SpriteOneError(f"Save failed: status={status}")
+    
+    def ai_load(self, filename: str = "/model.aif32"):
+        """Load model from flash."""
+        payload = filename.encode('ascii')
+        status, _ = self._send_command(CMD_AI_LOAD, payload)
+        
+        if status == RESP_NOT_FOUND:
+            raise SpriteOneError(f"Model not found: {filename}")
+        elif status != RESP_OK:
+            raise SpriteOneError(f"Load failed: status={status}")
+    
+    def ai_list_models(self) -> List[str]:
+        """
+        List saved models.
+        
+        Returns:
+            List of model filenames
+        """
+        status, data = self._send_command(CMD_AI_LIST)
+        
+        if status != RESP_OK:
+            raise SpriteOneError(f"List failed: status={status}")
+        
+        models = []
+        pos = 0
+        while pos < len(data):
+            name_len = data[pos]
+            if name_len == 0:
+                break
+            pos += 1
+            if pos + name_len <= len(data):
+                name = data[pos:pos+name_len].decode('ascii')
+                models.append(name)
+                pos += name_len
+            else:
+                break
+        
+        return models
+    
+    def ai_delete(self, filename: str):
+        """Delete a saved model."""
+        payload = filename.encode('ascii')
+        status, _ = self._send_command(CMD_AI_DELETE, payload)
+        
+        if status == RESP_NOT_FOUND:
+            raise SpriteOneError(f"Model not found: {filename}")
+        elif status != RESP_OK:
+            raise SpriteOneError(f"Delete failed: status={status}")
+
+
+# Example usage
+if __name__ == "__main__":
+    # Connect to Sprite One
+    with SpriteOne('COM3') as sprite:  # Change to your port
+        print("Connected to Sprite One!")
+        
+        # Get version
+        version = sprite.get_version()
+        print(f"Firmware: v{version[0]}.{version[1]}.{version[2]}")
+        
+        # Train model
+        print("\nTraining XOR model...")
+        loss = sprite.ai_train(epochs=100)
+        print(f"Training complete! Final loss: {loss:.6f}")
+        
+        # Test inference
+        print("\nTesting XOR:")
+        test_cases = [(0, 0), (0, 1), (1, 0), (1, 1)]
+        expected = [0, 1, 1, 0]
+        
+        for (a, b), exp in zip(test_cases, expected):
+            result = sprite.ai_infer(float(a), float(b))
+            prediction = 1 if result > 0.5 else 0
+            check = "✓" if prediction == exp else "✗"
+            print(f"  {a} XOR {b} = {result:.3f} → {prediction} {check}")
+        
+        # Save model
+        sprite.ai_save("/xor.aif32")
+        print("\nModel saved to flash!")
+        
+        # Graphics demo
+        print("\nDrawing graphics...")
+        sprite.clear()
+        sprite.rect(10, 10, 50, 30)
+        sprite.text(5, 5, "SPRITE ONE")
+        sprite.flush()
+        
+        print("\nDone!")

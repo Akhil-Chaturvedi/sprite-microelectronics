@@ -23,6 +23,8 @@ Welcome to Sprite One! This guide will help you get up and running quickly.
 - Host device (PC, ESP32, Arduino, etc.)
 - 3 jumper wires for UART connection
 
+**Note:** Current firmware simulates graphics output to serial. No physical display is connected yet.
+
 ### Connections
 
 Connect Sprite One to your host device via UART:
@@ -200,8 +202,8 @@ void loop() {
 After running the first program, you should see:
 
 ```
-Firmware: v1.0.0
-Graphics drawn!
+Firmware: v1.1.0
+Graphics drawn!  # Note: Framebuffer logged to serial, not displayed
 Training AI...
 Training complete! Loss: 0.012345
 1 XOR 0 = 0.978
@@ -210,7 +212,7 @@ Training complete! Loss: 0.012345
 On Sprite One's serial output (115200 baud):
 ```
 ╔════════════════════════════════════════╗
-║     SPRITE ONE v1.0.0                   ║
+║     SPRITE ONE v1.1.0                  ║
 ║     Graphics & AI Accelerator          ║
 ╚════════════════════════════════════════╝
 
@@ -224,7 +226,11 @@ On Sprite One's serial output (115200 baud):
 
 [INFO] AI Engine ready
 Ready for commands!
+
+[FLUSH] Dirty region: 8192 pixels  # Full screen
 ```
+
+**Note:** Graphics commands are processed but framebuffer output is currently simulated via serial logging.
 
 ---
 

@@ -5,6 +5,27 @@ All notable changes to Sprite One will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-02-08
+
+### Added
+- Dirty rectangle tracking for optimized framebuffer updates
+- `CMD_BUFFER_STATUS` (0x0E) for flow control queries
+- Static inline keywords to header functions (C++ compliance)
+
+### Changed
+- Cleaned up 80% of duplicate code across directories
+- Removed abandoned SPI slave experiments
+- Improved code organization
+
+### Performance
+- Potential 90% bandwidth savings for incremental graphics updates
+- Memory overhead: +80B flash, +8B RAM
+
+### Developer Experience
+- Cleaner repository structure
+- Fixed header anti-patterns
+- Better inline documentation
+
 ## [1.0.0] - 2026-02-07
 
 ### Added

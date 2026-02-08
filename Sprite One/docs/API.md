@@ -41,8 +41,23 @@ Get firmware version.
 **Example:**
 ```python
 version = sprite.get_version()
-print(f"v{version[0]}.{version[1]}.{version[2]}")  # v1.0.0
+print(f"v{version[0]}.{version[1]}.{version[2]}")  # v1.1.0
 ```
+
+#### get_buffer_status()
+
+Query available RX buffer space (flow control).
+
+**Returns:** `int` - Free bytes in RX buffer (max 64)
+
+**Example:**
+```python
+free = sprite.get_buffer_status()
+if payload_size <= free:
+    sprite.send_large_command(...)
+```
+
+**Note:** Basic implementation. Not actively used for flow control yet.
 
 ---
 
@@ -438,7 +453,13 @@ See [PROTOCOL.md](PROTOCOL.md) for low-level protocol specification.
 | `ai_infer()` | <1ms | Single inference |
 | `ai_save()` | ~10ms | Save to flash |
 | `ai_load()` | ~10ms | Load from flash |
-| `flush()` | <1ms | Display update |
+| `flush()` | <1ms | Display update (simulated) |
+
+**Graphics optimization (v1.1):**
+- Dirty rectangle tracking implemented
+- Flush reports changed region size
+- Potential 90%+ bandwidth savings for small updates
+- Currently logs to serial; future: differential updates
 
 ---
 

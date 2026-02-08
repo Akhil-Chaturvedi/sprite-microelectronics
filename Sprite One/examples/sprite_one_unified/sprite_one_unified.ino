@@ -21,8 +21,9 @@
 // Protocol
 #define SPRITE_HEADER       0xAA
 #define CMD_VERSION         0x0F
+#define CMD_BUFFER_STATUS   0x0E
 #define CMD_CLEAR           0x10
-#define CMD_RECT        0x12
+#define CMD_RECT            0x12
 #define CMD_FLUSH           0x2F
 #define CMD_AI_INFER        0x50
 #define CMD_AI_TRAIN        0x51
@@ -40,15 +41,42 @@
 #define DISPLAY_H 64
 uint8_t framebuffer[DISPLAY_W * DISPLAY_H / 8];
 
-void fb_clear() { memset(framebuffer, 0, sizeof(framebuffer)); }
+// Dirty rectangle tracking for optimized updates  
+struct {
+  uint16_t x1, y1, x2, y2;
+  bool is_dirty;
+} dirty_rect = {0, 0, 0, 0, false};
+
+void fb_mark_dirty(uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
+  if (!dirty_rect.is_dirty) {
+    dirty_rect.x1 = x;
+    dirty_rect.y1 = y;
+    dirty_rect.x2 = x + w - 1;
+    dirty_rect.y2 = y + h - 1;
+    dirty_rect.is_dirty = true;
+  } else {
+    // Expand dirty region
+    if (x < dirty_rect.x1) dirty_rect.x1 = x;
+    if (y < dirty_rect.y1) dirty_rect.y1 = y;
+    if (x + w - 1 > dirty_rect.x2) dirty_rect.x2 = x + w - 1;
+    if (y + h - 1 > dirty_rect.y2) dirty_rect.y2 = y + h - 1;
+  }
+}
+
+void fb_clear() { 
+  memset(framebuffer, 0, sizeof(framebuffer)); 
+  dirty_rect = {0, 0, DISPLAY_W - 1, DISPLAY_H - 1, true};
+}
 void fb_pixel(int16_t x, int16_t y, uint8_t color) {
   if (x < 0 || x >= DISPLAY_W || y < 0 || y >= DISPLAY_H) return;
   uint16_t byte_idx = x + (y / 8) * DISPLAY_W;
   uint8_t bit = y % 8;
   if (color) framebuffer[byte_idx] |= (1 << bit);
   else framebuffer[byte_idx] &= ~(1 << bit);
+  fb_mark_dirty(x, y, 1, 1);
 }
 void fb_rect(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t color) {
+  fb_mark_dirty(x, y, w, h);
   for (int16_t i = x; i < x + w; i++)
     for (int16_t j = y; j < y + h; j++)
       fb_pixel(i, j, color);
@@ -327,6 +355,10 @@ bool load_model(const char* filename) {
 
 // ===== Protocol =====
 
+// Protocol state variables (declared early for use in handle_command)
+static uint8_t rx_state = 0, rx_cmd, rx_len, rx_pos;
+static uint8_t rx_buf[64];
+
 void send_response(uint8_t cmd, uint8_t status, const uint8_t* data, uint8_t len) {
   Serial1.write(SPRITE_HEADER);
   Serial1.write(cmd);
@@ -346,12 +378,32 @@ void handle_command(uint8_t cmd, const uint8_t* payload, uint8_t len) {
       break;
     }
     
+    case CMD_BUFFER_STATUS: {
+      // Report available RX buffer space for flow control
+      uint16_t free_space = sizeof(rx_buf);  // Full buffer size available
+      uint8_t resp[2];
+      memcpy(resp, &free_space, 2);
+      send_response(cmd, RESP_OK, resp, 2);
+      break;
+    }
+    
     case CMD_CLEAR:
       fb_clear();
       send_response(cmd, RESP_OK, nullptr, 0);
       break;
       
     case CMD_FLUSH:
+      // Optimized: only report dirty region stats
+      if (dirty_rect.is_dirty) {
+        uint16_t area = (dirty_rect.x2 - dirty_rect.x1 + 1) * 
+                        (dirty_rect.y2 - dirty_rect.y1 + 1);
+        #if SPRITE_VERBOSE
+        Serial1.print("[FLUSH] Dirty region: ");
+        Serial1.print(area);
+        Serial1.println(" pixels");
+        #endif
+        dirty_rect.is_dirty = false;  // Reset
+      }
       send_response(cmd, RESP_OK, nullptr, 0);
       break;
       
@@ -502,9 +554,6 @@ void setup() {
   Serial1.println("Ready for commands! (AA CMD LEN DATA CHK)");
   Serial1.println("========================================\n");
 }
-
-static uint8_t rx_state = 0, rx_cmd, rx_len, rx_pos;
-static uint8_t rx_buf[64];
 
 void loop() {
   while (Serial1.available()) {

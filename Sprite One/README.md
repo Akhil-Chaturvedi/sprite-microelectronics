@@ -1,147 +1,135 @@
-# 🚀 Sprite One
+# Sprite One
 
-**The world's cheapest open-source hardware accelerator for microcontrollers.**
+Graphics and AI accelerator for embedded systems.
 
-Give your $3 Arduino the power of a dedicated graphics and AI co-processor—for just $5.
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-RP2040-orange.svg)](https://www.raspberrypi.com/products/rp2040/)
 
-![Status](https://img.shields.io/badge/status-in%20development-yellow)
-![License](https://img.shields.io/badge/license-MIT-blue)
-![BOM Cost](https://img.shields.io/badge/BOM-$1.80-green)
+## What It Does
 
----
+Sprite One is an RP2040-based coprocessor that handles graphics rendering and neural network operations via a simple UART protocol. Designed for microcontrollers that need to offload computationally intensive tasks.
 
-## 🎯 What is Sprite One?
+**Current capabilities:**
+- 128x64 framebuffer with basic primitives (pixel, rect, text simulation)
+- On-device neural network training (F32 and Q7 quantization)
+- Model persistence to flash storage
+- Binary protocol over UART (115200 baud)
 
-Sprite One is a tiny hardware module that connects to any Arduino, ESP32, or other microcontroller via SPI. It offloads graphics rendering and (eventually) AI inference from your main chip, making everything faster and smoother.
+**What it doesn't do:**
+- No real display drivers yet (framebuffer is logged to serial for testing)
+- No hardware graphics acceleration (software rendering)
+- Limited to simple neural network architectures (XOR demo included)
 
-### The Problem
-- Your ESP32 is fast, but it chokes when driving a display AND running your code
-- Professional solutions cost $30-60+ (Google Coral, Nextion, etc.)
-- They're closed-source black boxes
+## Quick Start
 
-### The Solution
-- **$10-15 retail** (BOM ~$1.80 at volume)
-- **100% open source** - hardware, firmware, everything
-- **Dead simple API** - 5 lines of code to get started
-- **Multi-display support** - ILI9341, ST7789, ST7735, and more
+### Hardware
 
----
-
-## ⚡ Quick Start
-
-```cpp
-#include <Sprite.h>
-
-Sprite gfx;
-
-void setup() {
-    gfx.begin(10);  // CS on pin 10
-    gfx.initDisplay(DISPLAY_ILI9341, 320, 240);
-}
-
-void loop() {
-    gfx.clear(BLACK);
-    gfx.rect(10, 10, 50, 50, RED);
-    gfx.text(100, 100, "Hello World!");
-    gfx.flush();
-    delay(16);
-}
+Connect via UART:
+```
+Sprite One (RP2040)    →    Host
+TX (GPIO 0)            →    RX
+RX (GPIO 1)            →    TX  
+GND                    →    GND
 ```
 
----
+### Firmware Upload
 
-## 📁 Project Structure
-
-```
-Sprite One/
-├── firmware/           # RP2040 accelerator firmware
-│   ├── src/
-│   │   ├── main.cpp            # Dual-core main program
-│   │   └── display_drivers.cpp # Multi-display support
-│   └── platformio.ini
-│
-├── library/            # Arduino host library
-│   ├── src/Sprite.h    # Just include this!
-│   └── examples/
-│
-├── docs/
-│   └── protocol.md     # SPI protocol specification
-│
-└── wokwi/              # Hardware simulation
-    └── diagram.json
+```bash
+cd firmware
+arduino-cli compile --fqbn rp2040:rp2040:rpipico ../examples/sprite_one_unified
+arduino-cli upload -p COM3 --fqbn rp2040:rp2040:rpipico
 ```
 
+### Python Example
+
+```python
+from sprite_one import SpriteOne
+
+with SpriteOne('COM3') as sprite:
+    # Train XOR neural network
+    loss = sprite.ai_train(epochs=100)
+    print(f"Trained. Loss: {loss:.6f}")
+    
+    # Run inference
+    result = sprite.ai_infer(1.0, 0.0)
+    print(f"1 XOR 0 = {result:.3f}")
+```
+
+## Specifications
+
+| Feature | Current State |
+|---------|---------------|
+| MCU | RP2040 (133 MHz, 264KB RAM) |
+| Flash usage | 109KB (5%) |
+| RAM usage | 12.5KB (5%) |
+| Protocol | UART, 115200 baud |
+| Framebuffer | 128x64, 1-bit (simulated) |
+| AI training | ~3s for 100 epochs (XOR) |
+| AI inference | <1ms |
+| Model storage | LittleFS on flash |
+
+## Project Structure
+
+```
+sprite-one/
+├── examples/
+│   └── sprite_one_unified/    # Main demo firmware
+├── firmware/
+│   └── include/               # Core headers
+├── host/
+│   ├── python/               # Python library
+│   └── c/                    # C library for embedded hosts
+└── docs/
+    ├── GETTING_STARTED.md
+    └── API.md
+```
+
+## Documentation
+
+- **[Getting Started](docs/GETTING_STARTED.md)** - Setup and first program
+- **[API Reference](docs/API.md)** - Complete command reference
+- **[Build Configurations](firmware/BUILD_CONFIGS.md)** - Compiler flags and variants
+
+## Current Limitations
+
+1. **Graphics:** Framebuffer is simulated (serial output), no real display drivers
+2. **Protocol:** No flow control implementation yet (command added, not used)
+3. **AI Models:** Limited to simple feedforward networks
+4. **Performance:** Software rendering, no DMA for UART
+5. **Testing:** Requires physical hardware for integration tests
+
+## Use Cases
+
+**Good for:**
+- Prototyping AI at the edge
+- Learning TinyML concepts
+- Offloading simple graphics tasks
+
+**Not suitable for:**
+- High-framerate graphics (UART bottleneck)
+- Complex deep learning models
+- Production systems without further development
+
+## Development
+
+Requires:
+- Arduino IDE 2.0+ or PlatformIO
+- RP2040 board support
+- Python 3.7+ (for host library)
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup.
+
+## License
+
+MIT License - See [LICENSE](LICENSE)
+
+## Acknowledgments
+
+- **AIfES** - TinyML framework
+- **LittleFS** - Embedded filesystem
+- **RP2040** - Raspberry Pi Foundation
+
 ---
 
-## 🛠 Hardware
-
-### Bill of Materials (~$1.80)
-
-| Component | Part | Cost |
-|-----------|------|------|
-| MCU | RP2040 | $0.80 |
-| Flash | W25Q16 2MB | $0.15 |
-| Crystal | 12MHz | $0.05 |
-| LDO | AP2112K-3.3 | $0.10 |
-| USB-C | Connector | $0.15 |
-| Passives | Caps/resistors | $0.25 |
-| PCB | 25x25mm 2-layer | $0.30 |
-
-### Why RP2040?
-
-- **$0.80** at volume (cheapest option)
-- **PIO** - Programmable I/O for blazing fast display driving
-- **Dual-core** - One for SPI, one for rendering
-- **264KB RAM** - Enough for full framebuffer
-
----
-
-## 🎴 Supported Displays
-
-| Display | Resolution | Status |
-|---------|------------|--------|
-| ILI9341 | 320×240 | ✅ Supported |
-| ST7789 | 240×240 / 320×240 | ✅ Supported |
-| ST7735 | 128×160 | ✅ Supported |
-| SSD1306 | 128×64 OLED | 🔜 Coming |
-| ILI9488 | 480×320 | 🔜 Coming |
-
----
-
-## 🗺 Roadmap
-
-- [x] **Phase 1**: Protocol & architecture design
-- [ ] **Phase 2**: Core firmware (in progress)
-- [ ] **Phase 3**: Wokwi simulation validation
-- [ ] **Phase 4**: Physical prototype
-- [ ] **Phase 5**: AI/ML inference support
-- [ ] **Phase 6**: Kickstarter launch
-
----
-
-## 🤝 Contributing
-
-This is a community-driven project! We welcome contributions:
-
-1. Fork the repo
-2. Create a feature branch
-3. Submit a PR
-
----
-
-## 📜 License
-
-MIT License - Use it, modify it, sell products with it. Just give credit.
-
----
-
-## 💬 Community
-
-- **Discord**: Coming soon
-- **Hackaday**: Coming soon
-- **Twitter**: @SpriteElectro
-
----
-
-*Built with ❤️ by Sprite Microelectronics*  
-*"Silicon for the Rest of Us"*
+**Author:** Akhil Chaturvedi  
+**Repository:** [github.com/Akhil-Chaturvedi/sprite-microelectronics](https://github.com/Akhil-Chaturvedi/sprite-microelectronics)

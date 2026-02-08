@@ -12,7 +12,6 @@
 #include <aifes.h>
 #include <LittleFS.h>
 
-// ============ AI Persistence Inline Implementation ============
 // Model file magic number: 'AIFE'
 #define AI_MODEL_MAGIC 0x41494645
 #define AI_MODEL_TYPE_F32 0
@@ -201,8 +200,6 @@ void ai_list_models(Print& output) {
   output.print((fs_info.totalBytes - fs_info.usedBytes) / 1024);
   output.println(" KB");
 }
-// ============ End AI Persistence ============
-
 
 // XOR training data
 float x_train[] = {

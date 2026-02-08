@@ -118,7 +118,7 @@ enum SpriteStatus {
 /**
  * Print startup banner with version info
  */
-inline void print_startup_banner() {
+static inline void print_startup_banner() {
   Serial1.println(F("╔════════════════════════════════════════╗"));
   Serial1.print(F("║     SPRITE ONE v"));
   Serial1.print(SPRITE_VERSION_MAJOR);
@@ -139,7 +139,7 @@ inline void print_startup_banner() {
 /**
  * Format bytes into human-readable string
  */
-inline String format_bytes(uint32_t bytes) {
+static inline String format_bytes(uint32_t bytes) {
   if (bytes < 1024) return String(bytes) + "B";
   if (bytes < 1024*1024) return String(bytes/1024) + "KB";
   return String(bytes/(1024*1024)) + "MB";
@@ -148,7 +148,7 @@ inline String format_bytes(uint32_t bytes) {
 /**
  * Format milliseconds into human-readable string
  */
-inline String format_time(uint32_t ms) {
+static inline String format_time(uint32_t ms) {
   if (ms < 1000) return String(ms) + "ms";
   if (ms < 60000) return String(ms/1000.0, 1) + "s";
   return String(ms/60000) + "m " + String((ms%60000)/1000) + "s";
@@ -157,7 +157,7 @@ inline String format_time(uint32_t ms) {
 /**
  * Validate parameter range
  */
-inline bool validate_range(int value, int min, int max, const char* name) {
+static inline bool validate_range(int value, int min, int max, const char* name) {
   if (value < min || value > max) {
     LOG_ERROR(String(name) + " out of range: " + String(value));
     return false;
@@ -168,7 +168,7 @@ inline bool validate_range(int value, int min, int max, const char* name) {
 /**
  * Safe string copy with bounds checking
  */
-inline void safe_strcpy(char* dest, const char* src, size_t max_len) {
+static inline void safe_strcpy(char* dest, const char* src, size_t max_len) {
   if (!dest || !src) return;
   strncpy(dest, src, max_len - 1);
   dest[max_len - 1] = '\0';
@@ -177,7 +177,7 @@ inline void safe_strcpy(char* dest, const char* src, size_t max_len) {
 /**
  * Get free RAM
  */
-inline uint32_t get_free_ram() {
+static inline uint32_t get_free_ram() {
   extern char __StackLimit, __bss_end__;
   char top;
   return &top - __bss_end__;
@@ -186,7 +186,7 @@ inline uint32_t get_free_ram() {
 /**
  * Print system info
  */
-inline void print_system_info() {
+static inline void print_system_info() {
   Serial1.println(F("=== System Info ==="));
   Serial1.print(F("Flash: "));
   Serial1.print(format_bytes(2097152)); // 2MB

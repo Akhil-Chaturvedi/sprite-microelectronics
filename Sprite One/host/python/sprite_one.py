@@ -1,14 +1,19 @@
 """
 Sprite One - Python Host Library
-Week 4 Day 23: Easy Protocol Control
+v1.2: USB-CDC Transport Support
 
 Simple Python library for controlling Sprite One via serial.
-Supports all graphics and AI commands.
+Supports all graphics and AI commands over UART or USB-CDC.
 
 Usage:
     from sprite_one import SpriteOne
     
-    sprite = SpriteOne('/dev/ttyUSB0')  # or 'COM3' on Windows
+    # Auto-detect transport
+    sprite = SpriteOne('/dev/ttyACM0')  # USB-CDC on Linux
+    sprite = SpriteOne('COM3')          # Windows (auto-detect)
+    
+    # Explicit mode
+    sprite = SpriteOne('/dev/ttyUSB0', mode='uart')  # Force UART
     
     # Train AI model
     sprite.ai_train(epochs=100)
@@ -49,6 +54,16 @@ CMD_AI_LOAD = 0x54
 CMD_AI_LIST = 0x55
 CMD_AI_DELETE = 0x56
 
+# Model management commands
+CMD_MODEL_INFO = 0x60
+CMD_MODEL_LIST = 0x61
+CMD_MODEL_SELECT = 0x62
+CMD_MODEL_UPLOAD = 0x63
+CMD_MODEL_DELETE = 0x64
+CMD_FINETUNE_START = 0x65
+CMD_FINETUNE_DATA = 0x66
+CMD_FINETUNE_STOP = 0x67
+
 # Response codes
 RESP_OK = 0x00
 RESP_ERROR = 0x01
@@ -66,19 +81,39 @@ class SpriteOne:
     Sprite One host library.
     
     Provides high-level interface to Sprite One graphics and AI accelerator.
+    Supports both UART and USB-CDC transports.
     """
     
-    def __init__(self, port: str, baudrate: int = 115200, timeout: float = 2.0):
+    def __init__(self, port: str, baudrate: int = 115200, timeout: float = 2.0, mode: str = 'auto'):
         """
         Initialize connection to Sprite One.
         
         Args:
-            port: Serial port (e.g., 'COM3', '/dev/ttyUSB0')
-            baudrate: Serial baudrate (default: 115200)
+            port: Serial port (e.g., 'COM3', '/dev/ttyUSB0', '/dev/ttyACM0')
+            baudrate: Serial baudrate (default: 115200, ignored for USB-CDC)
             timeout: Read timeout in seconds (default: 2.0)
+            mode: Transport mode - 'auto' (detect), 'usb' (USB-CDC), 'uart' (hardware UART)
         """
+        self.mode = mode if mode != 'auto' else self._detect_transport(port)
         self.ser = serial.Serial(port, baudrate, timeout=timeout)
         time.sleep(0.1)  # Allow device to stabilize
+    
+    def _detect_transport(self, port: str) -> str:
+        """
+        Detect if port is USB-CDC or hardware UART.
+        
+        Args:
+            port: Serial port string
+            
+        Returns:
+            'usb' or 'uart'
+        """
+        port_lower = port.lower()
+        # Linux: /dev/ttyACM* is USB-CDC, /dev/ttyUSB* is UART adapter  
+        # Windows: USB Serial devices often in device name
+        if 'acm' in port_lower or 'cdc' in port_lower:
+            return 'usb'
+        return 'uart'
         
     def close(self):
         """Close serial connection."""
@@ -136,6 +171,29 @@ class SpriteOne:
     def _checksum(self, data: bytes) -> int:
         """Calculate simple checksum."""
         return (~sum(data) + 1) & 0xFF
+    
+    def send_bulk(self, data: bytes, chunk_size: Optional[int] = None) -> int:
+        """
+        Send bulk data (optimized for USB-CDC).
+        
+        Args:
+            data: Data bytes to send
+            chunk_size: Optional chunk size (auto-detected based on transport)
+            
+        Returns:
+            Number of bytes sent
+        """
+        if chunk_size is None:
+            # USB-CDC can handle larger chunks
+            chunk_size = 4096 if self.mode == 'usb' else 64
+        
+        total_sent = 0
+        for i in range(0, len(data), chunk_size):
+            chunk = data[i:i+chunk_size]
+            total_sent += self.ser.write(chunk)
+        
+        return total_sent
+
     
     # ===== System Commands =====
     
@@ -315,6 +373,210 @@ class SpriteOne:
             raise SpriteOneError(f"Model not found: {filename}")
         elif status != RESP_OK:
             raise SpriteOneError(f"Delete failed: status={status}")
+
+    # ===== Model Management (v1.5+) =====
+    
+    def model_info(self) -> dict:
+        """
+        Get active model information.
+        
+        Returns:
+            Dict with model header fields, or None if no active model
+        """
+        status, data = self._send_command(CMD_MODEL_INFO)
+        
+        if status == RESP_NOT_FOUND:
+            return None
+        elif status != RESP_OK or len(data) < 32:
+            raise SpriteOneError(f"Model info failed: status={status}")
+        
+        # Parse ModelHeader (32 bytes)
+        magic, version, input_size, output_size, hidden_size, model_type, reserved, weights_crc = \
+            struct.unpack('<IHBBBBHI', data[:16])
+        name = data[16:32].decode('utf-8', errors='ignore').rstrip('\x00')
+        
+        return {
+            'magic': hex(magic),
+            'version': version,
+            'input_size': input_size,
+            'output_size': output_size,
+            'hidden_size': hidden_size,
+            'model_type': 'F32' if model_type == 0 else 'Q7',
+            'weights_crc': hex(weights_crc),
+            'name': name
+        }
+    
+    def model_list(self) -> list:
+        """
+        List all models on device.
+        
+        Returns:
+            List of model filenames
+        """
+        status, data = self._send_command(CMD_MODEL_LIST)
+        
+        if status != RESP_OK:
+            raise SpriteOneError(f"Model list failed: status={status}")
+        
+        models = []
+        pos = 0
+        while pos < len(data):
+            name_len = data[pos]
+            if name_len == 0:
+                break
+            pos += 1
+            if pos + name_len <= len(data):
+                name = data[pos:pos+name_len].decode('ascii', errors='ignore')
+                models.append(name)
+                pos += name_len
+            else:
+                break
+        
+        return models
+    
+    def model_select(self, filename: str) -> bool:
+        """
+        Select and activate a model.
+        
+        Args:
+            filename: Model filename to activate
+            
+        Returns:
+            True if successful
+        """
+        payload = filename.encode('ascii')
+        status, _ = self._send_command(CMD_MODEL_SELECT, payload)
+        
+        if status == RESP_NOT_FOUND:
+            raise SpriteOneError(f"Model not found: {filename}")
+        elif status != RESP_OK:
+            raise SpriteOneError(f"Model select failed: status={status}")
+        
+        return True
+    
+    def model_upload(self, filename: str, data: bytes) -> bool:
+        """
+        Upload a model to device.
+        
+        Args:
+            filename: Destination filename
+            data: Model binary data (AIFes .aif32 format)
+            
+        Returns:
+            True if successful
+        """
+        # Send filename + size first
+        header = struct.pack('<H', len(data)) + filename.encode('ascii') + b'\x00'
+        status, _ = self._send_command(CMD_MODEL_UPLOAD, header)
+        
+        if status == RESP_BUSY:
+            raise SpriteOneError("Device busy, try again")
+        elif status != RESP_OK:
+            raise SpriteOneError(f"Upload init failed: status={status}")
+        
+        # Send data in chunks (max 256 bytes per chunk)
+        chunk_size = 256
+        for i in range(0, len(data), chunk_size):
+            chunk = data[i:i+chunk_size]
+            # Use a special continuation packet (same command, chunk offset)
+            offset_header = struct.pack('<I', i)
+            status, _ = self._send_command(CMD_MODEL_UPLOAD, offset_header + chunk)
+            
+            if status != RESP_OK:
+                raise SpriteOneError(f"Upload chunk failed at offset {i}: status={status}")
+        
+        return True
+    
+    def model_delete(self, filename: str) -> bool:
+        """
+        Delete a model from device.
+        
+        Args:
+            filename: Model filename to delete
+            
+        Returns:
+            True if successful
+        """
+        payload = filename.encode('ascii')
+        status, _ = self._send_command(CMD_MODEL_DELETE, payload)
+        
+        if status == RESP_NOT_FOUND:
+            raise SpriteOneError(f"Model not found: {filename}")
+        elif status != RESP_OK:
+            raise SpriteOneError(f"Model delete failed: status={status}")
+        
+        return True
+    
+    def finetune_start(self, learning_rate: float = 0.01) -> bool:
+        """
+        Start fine-tuning session on active model.
+        
+        Args:
+            learning_rate: Learning rate for fine-tuning
+            
+        Returns:
+            True if session started
+        """
+        payload = struct.pack('<f', learning_rate)
+        status, _ = self._send_command(CMD_FINETUNE_START, payload)
+        
+        if status != RESP_OK:
+            raise SpriteOneError(f"Finetune start failed: status={status}")
+        
+        return True
+    
+    def finetune_data(self, inputs: list, outputs: list) -> float:
+        """
+        Send training sample for fine-tuning.
+        
+        Args:
+            inputs: List of input floats
+            outputs: List of expected output floats
+            
+        Returns:
+            Current loss value
+        """
+        # Pack inputs and outputs as floats
+        payload = struct.pack('<B', len(inputs))
+        payload += struct.pack(f'<{len(inputs)}f', *inputs)
+        payload += struct.pack('<B', len(outputs))
+        payload += struct.pack(f'<{len(outputs)}f', *outputs)
+        
+        status, data = self._send_command(CMD_FINETUNE_DATA, payload)
+        
+        if status != RESP_OK:
+            raise SpriteOneError(f"Finetune data failed: status={status}")
+        
+        # Response contains current loss
+        if len(data) >= 4:
+            loss = struct.unpack('<f', data[:4])[0]
+            return loss
+        
+        return 0.0
+    
+    def finetune_stop(self, save: bool = True) -> dict:
+        """
+        Stop fine-tuning session.
+        
+        Args:
+            save: Whether to save the updated model
+            
+        Returns:
+            Dict with final stats (loss, samples trained)
+        """
+        payload = struct.pack('<B', 1 if save else 0)
+        status, data = self._send_command(CMD_FINETUNE_STOP, payload)
+        
+        if status != RESP_OK:
+            raise SpriteOneError(f"Finetune stop failed: status={status}")
+        
+        result = {'saved': save}
+        if len(data) >= 8:
+            loss, samples = struct.unpack('<fI', data[:8])
+            result['final_loss'] = loss
+            result['samples_trained'] = samples
+        
+        return result
 
 
 # Example usage

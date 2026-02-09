@@ -2,109 +2,90 @@
 
 All notable changes to Sprite One will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+
+## [2.0.0] - 2026-02-09
+
+### Added
+- **Web Trainer** - Browser-based training interface
+  - WebGPU/CPU training with real-time chart
+  - Webcam, file, and canvas data input
+  - Model architecture visualization
+  - One-click device deployment
+  
+- **TFLite Converter** (`tools/converter/`)
+  - Converts `.tflite`, `.h5`, `.pb`, TF.js to `.aif32`
+  - Lightweight FlatBuffer parser (no TensorFlow for .tflite)
+  - Dequantization support (INT8, UINT8 → F32)
+  - Browser and Python versions
+  
+- **Model Management** (firmware commands 0x60-0x67)
+  - `model_info`, `model_list`, `model_select`
+  - `model_upload`, `model_delete`
+  - `finetune_start`, `finetune_data`, `finetune_stop` (stubs)
+
+- **Python Library Extensions**
+  - 8 new model management methods
+  - Chunked upload support
+  
+- **Unit Tests** - 27 Python tests for converter
+
+### Changed
+- Webapp UI redesigned with training charts
+- README updated to v2.0
+- Documentation consistency pass
+
+---
+
+## [1.5.0] - 2026-02-09
+
+### Added
+- SSD1306 OLED display driver (128x64, I2C)
+- Hardware sprite system (8 sprites, Z-ordering)
+- Model hot-swap (switch models without reboot)
+- LittleFS model persistence
+
+### Display
+- I2C on GP4 (SDA), GP5 (SCL)
+- 30 FPS display refresh
+- Sprite collision detection (AABB)
+
+---
+
+## [1.2.0] - 2026-02-08
+
+### Added
+- USB-CDC transport (12 Mbps vs 115200 bps UART)
+- Transport auto-detection
+- Python `mode` parameter: `'auto'`, `'usb'`, `'uart'`
+
+### Performance
+- USB: ~100x faster than UART
+- Memory: +508B flash, +24B RAM
+
+---
 
 ## [1.1.0] - 2026-02-08
 
 ### Added
-- Dirty rectangle tracking for optimized framebuffer updates
-- `CMD_BUFFER_STATUS` (0x0E) for flow control queries
-- Static inline keywords to header functions (C++ compliance)
+- Dirty rectangle tracking
+- `CMD_BUFFER_STATUS` (0x0E)
+- Code cleanup (removed 80% duplicate code)
 
-### Changed
-- Cleaned up 80% of duplicate code across directories
-- Removed abandoned SPI slave experiments
-- Improved code organization
-
-### Performance
-- Potential 90% bandwidth savings for incremental graphics updates
-- Memory overhead: +80B flash, +8B RAM
-
-### Developer Experience
-- Cleaner repository structure
-- Fixed header anti-patterns
-- Better inline documentation
+---
 
 ## [1.0.0] - 2026-02-07
 
-### Added
+### Initial Release
+- RP2040 firmware with graphics + AI
+- 128x64 framebuffer
+- AIfES on-device training (F32, Q7)
+- LittleFS persistence
+- Python and C host libraries
+- Protocol over UART
 
-#### Firmware (RP2040)
-- Graphics engine with 128x64 framebuffer
-- AI engine with on-device training (AIfES)
-- F32 and Q7 model quantization support
-- Model persistence via LittleFS
-- Binary protocol over UART (115200 baud)
-- Enhanced debug logging and progress indicators
-- Memory monitoring utilities
-- CRC32 data integrity checks
-
-#### Host Libraries
-- **Python library** (`host/python/sprite_one.py`)
-  - Full API wrapper for all commands
-  - Context manager support
-  - Error handling with custom exceptions
-  - Type hints for better IDE support
-- **C library** (`host/c/`) for embedded hosts
-  - Platform-agnostic UART abstraction
-  - Works with ESP32, STM32, Arduino
-  - Clean API design
-
-#### Examples
-- `sprite_one_unified.ino` - Complete system demo
-- `aifes_xor_training.ino` - Neural network training
-- `aifes_q7_demo.ino` - Q7 quantization
-- `aifes_persistence_demo.ino` - Model save/load
-- `examples.py` - Python examples
-- `test_suite.py` - Automated testing
-
-#### Documentation
-- Getting Started Guide
-- Complete API Reference
-- Testing Guide
-- Build Configurations
-- Optimization Report
-- Protocol Specification
-
-#### Development Tools
-- Automated test suite with 28+ tests
-- Unit tests (no hardware required)
-- Build configurations (debug, release, minimal)
-- Performance profiling tools
-
-### Performance
-- Flash usage: 109KB (5.2% of 2MB)
-- RAM usage: 12.5KB (4.7% of 264KB)
-- Training speed: 100 epochs in ~3 seconds
-- Inference latency: <1ms
-- 75% memory savings with Q7 quantization
-
-### Security
-- CRC32 checksums for model files
-- Model corruption detection
-- Safe buffer handling
-
----
-
-## [Unreleased]
-
-### Planned
-- Hardware PCB design
-- Additional AI model architectures
-- More display driver support
-- Bluetooth connectivity
-- Web-based configuration tool
-
----
-
-## Development History
-
-This project was developed over 4 weeks (Days 1-28):
-
-- **Week 1 (Days 1-7):** Protocol design & graphics engine
-- **Week 2 (Days 8-14):** AI integration & persistence
-- **Week 3 (Days 15-21):** Advanced features & optimization
-- **Week 4 (Days 22-28):** Integration, testing, documentation, release
-
-For detailed development history, see the `development/` directory.
+### Specifications
+- Flash: 109KB (5.2%)
+- RAM: 12.5KB (4.7%)
+- Training: ~3s for 100 epochs
+- Inference: <1ms

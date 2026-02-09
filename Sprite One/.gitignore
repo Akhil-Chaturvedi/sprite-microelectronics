@@ -1,7 +1,5 @@
-# Development artifacts (internal tracking)
-development/
-
 # Build outputs
+build/
 firmware/build/
 firmware/.pio/
 *.bin
@@ -34,21 +32,18 @@ env/
 *.swp
 *.swo
 *~
-.DS_Store
 
 # OS
+.DS_Store
 Thumbs.db
 Desktop.ini
-.DS_Store
 
 # Logs and temp files
 *.log
 *.tmp
 *.bak
 *.old
-test_output.txt
-graphics_test.txt
 
-# Empty directories
+# Empty directories (keep structure)
 firmware/examples/
 firmware/src/

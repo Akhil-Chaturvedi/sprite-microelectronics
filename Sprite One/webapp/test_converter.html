@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Converter Tests</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            padding: 20px;
+        }
+
+        .pass {
+            color: #4caf50;
+        }
+
+        .fail {
+            color: #f44336;
+        }
+
+        .test {
+            margin: 4px 0;
+        }
+
+        h2 {
+            color: #4a9eff;
+            border-bottom: 1px solid #333;
+            padding-bottom: 8px;
+        }
+
+        .summary {
+            margin-top: 20px;
+            padding: 12px;
+            border: 1px solid #333;
+            border-radius: 4px;
+        }
+
+        .error {
+            background: #2a1515;
+            padding: 10px;
+            border: 1px solid #f44336;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>TFLite/AIFes Converter - JavaScript Tests</h1>
+    <div id="results"></div>
+
+    <script src="js/converter.js"></script>
+    <script>
+        // Test Framework
+        let passed = 0;
+        let failed = 0;
+        const results = document.getElementById('results');
+
+        function log(msg, isPass) {
+            const div = document.createElement('div');
+            div.className = 'test ' + (isPass ? 'pass' : 'fail');
+            div.textContent = (isPass ? '✓ ' : '✗ ') + msg;
+            results.appendChild(div);
+            if (isPass) passed++; else failed++;
+        }
+
+        function logError(msg) {
+            const div = document.createElement('div');
+            div.className = 'error';
+            div.textContent = 'ERROR: ' + msg;
+            results.appendChild(div);
+        }
+
+        function section(name) {
+            const h = document.createElement('h2');
+            h.textContent = name;
+            results.appendChild(h);
+        }
+
+        function assertEqual(a, b, msg) {
+            if (a === b) {
+                log(msg, true);
+            } else {
+                log(`${msg}: expected ${b}, got ${a}`, false);
+            }
+        }
+
+        function assertClose(a, b, msg, eps = 0.0001) {
+            if (Math.abs(a - b) < eps) {
+                log(msg, true);
+            } else {
+                log(`${msg}: expected ${b}, got ${a}`, false);
+            }
+        }
+
+        function assertTrue(cond, msg) {
+            if (cond) {
+                log(msg, true);
+            } else {
+                log(`${msg}: condition was false`, false);
+            }
+        }
+
+        // Check if converter loaded
+        if (typeof AIFesConverter === 'undefined') {
+            logError('converter.js failed to load! Check js/converter.js path.');
+        } else {
+            runTests();
+        }
+
+        function runTests() {
+            // ========== CRC32 Tests ==========
+            section('CRC32');
+
+            try {
+                // Create a mock parser for testing
+                const mockParser = {
+                    data: new Uint8Array(0),
+                    model: { subgraphs: [], buffers: [], operatorCodes: [] }
+                };
+                const converter = new AIFesConverter(mockParser);
+
+                // Test 1: Known CRC32 value
+                const data = new TextEncoder().encode('123456789');
+                const crc = converter._crc32(data);
+                assertEqual(crc, 0xCBF43926, 'CRC32 of "123456789"');
+
+                // Test 2: Consistency
+                const data2 = new Uint8Array([0, 1, 2, 3, 4, 5]);
+                const crc1 = converter._crc32(data2);
+                const crc2 = converter._crc32(data2);
+                assertEqual(crc1, crc2, 'CRC32 consistency');
+
+                // Test 3: Different data -> different CRC
+                const crcA = converter._crc32(new Uint8Array([0, 0, 0, 0]));
+                const crcB = converter._crc32(new Uint8Array([0, 0, 0, 1]));
+                assertTrue(crcA !== crcB, 'CRC32 different for different data');
+
+            } catch (e) {
+                logError('CRC32 tests failed: ' + e.message);
+            }
+
+            // ========== Dequantization Tests ==========
+            section('Dequantization');
+
+            try {
+                const mockParser = {
+                    data: new Uint8Array(0),
+                    model: { subgraphs: [], buffers: [], operatorCodes: [] }
+                };
+                const converter = new AIFesConverter(mockParser);
+
+                // Float32 passthrough
+                const floats = new Float32Array([1.0, 2.0, 3.0]);
+                const floatData = new Uint8Array(floats.buffer);
+                const result1 = converter._dequantize(floatData, 0, null);
+                assertEqual(result1[0], 1.0, 'Float32 passthrough [0]');
+                assertEqual(result1[1], 2.0, 'Float32 passthrough [1]');
+                assertEqual(result1[2], 3.0, 'Float32 passthrough [2]');
+
+                // INT8 dequantization
+                const int8s = new Int8Array([0, 127, -128]);
+                const int8Data = new Uint8Array(int8s.buffer);
+                const quant1 = { scale: [0.1], zeroPoint: [0] };
+                const result2 = converter._dequantize(int8Data, 9, quant1);
+                assertClose(result2[0], 0.0, 'INT8 dequant [0]');
+                assertClose(result2[1], 12.7, 'INT8 dequant [1]');
+                assertClose(result2[2], -12.8, 'INT8 dequant [2]');
+
+                // INT8 with zero point
+                const int8s2 = new Int8Array([10, 20, 30]);
+                const int8Data2 = new Uint8Array(int8s2.buffer);
+                const quant2 = { scale: [0.5], zeroPoint: [20] };
+                const result3 = converter._dequantize(int8Data2, 9, quant2);
+                assertClose(result3[0], -5.0, 'INT8 with zp [0]');
+                assertClose(result3[1], 0.0, 'INT8 with zp [1]');
+                assertClose(result3[2], 5.0, 'INT8 with zp [2]');
+
+            } catch (e) {
+                logError('Dequantization tests failed: ' + e.message);
+            }
+
+            // ========== Global Function Tests ==========
+            section('Global Functions');
+
+            try {
+                assertTrue(typeof TFLiteParser === 'function', 'TFLiteParser is defined');
+                assertTrue(typeof AIFesConverter === 'function', 'AIFesConverter is defined');
+                assertTrue(typeof convertTFLiteToAIFes === 'function', 'convertTFLiteToAIFes is defined');
+            } catch (e) {
+                logError('Global function tests failed: ' + e.message);
+            }
+
+            // ========== Summary ==========
+            const summary = document.createElement('div');
+            summary.className = 'summary';
+            summary.innerHTML = `
+                <strong>Results:</strong> ${passed} passed, ${failed} failed<br>
+                <strong>Status:</strong> ${failed === 0 ? '<span class="pass">ALL TESTS PASSED</span>' : '<span class="fail">SOME TESTS FAILED</span>'}
+            `;
+            results.appendChild(summary);
+
+            console.log(`Tests: ${passed} passed, ${failed} failed`);
+        }
+    </script>
+</body>
+
+</html>

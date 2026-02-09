@@ -1,6 +1,8 @@
 /*
  * Sprite One - Polished Unified Demo
  * Week 4 Day 27: Enhanced with better UX!
+ * v1.2: USB-CDC Transport Support
+ * v1.3: Real Display Driver (SSD1306)
  * 
  * Improvements:
  * - Better error handling
@@ -8,29 +10,63 @@
  * - Progress indicators
  * - Memory monitoring
  * - Graceful degradation
+ * - Dual transport (UART + USB-CDC)
+ * - Real SSD1306 OLED display support
  */
 
 #include <aifes.h>
 #include <LittleFS.h>
+#include "sprite_transport.h"
+#include "sprite_display.h"
+#include "sprite_engine.h"
+#include "sprite_model.h"
 
 // Enhanced configuration
-#define SPRITE_VERSION "1.0.0"
+#define SPRITE_VERSION "1.5.0"
 #define ENABLE_VERBOSE_LOGGING true
 #define ENABLE_PROGRESS_BARS true
+
+// Display configuration
+// 0 = Simulated (serial output only)
+// 1 = SSD1306 (128x64 OLED via I2C)
+#define SPRITE_DISPLAY_TYPE 1
 
 // Protocol
 #define SPRITE_HEADER       0xAA
 #define CMD_VERSION         0x0F
 #define CMD_BUFFER_STATUS   0x0E
 #define CMD_CLEAR           0x10
+#define CMD_PIXEL           0x11
 #define CMD_RECT            0x12
+#define CMD_TEXT            0x21
 #define CMD_FLUSH           0x2F
+
+// Sprite commands
+#define CMD_SPRITE_CREATE   0x30
+#define CMD_SPRITE_MOVE     0x31
+#define CMD_SPRITE_DELETE   0x32
+#define CMD_SPRITE_VISIBLE  0x33
+#define CMD_SPRITE_COLLISION 0x34
+#define CMD_SPRITE_RENDER   0x35
+#define CMD_SPRITE_CLEAR    0x36
+
 #define CMD_AI_INFER        0x50
 #define CMD_AI_TRAIN        0x51
 #define CMD_AI_STATUS       0x52
 #define CMD_AI_SAVE         0x53
 #define CMD_AI_LOAD         0x54
 #define CMD_AI_LIST         0x55
+#define CMD_AI_DELETE       0x56
+
+// Model management commands
+#define CMD_MODEL_INFO      0x60
+#define CMD_MODEL_LIST      0x61
+#define CMD_MODEL_SELECT    0x62
+#define CMD_MODEL_UPLOAD    0x63
+#define CMD_MODEL_DELETE    0x64
+#define CMD_FINETUNE_START  0x65
+#define CMD_FINETUNE_DATA   0x66
+#define CMD_FINETUNE_STOP   0x67
 
 #define RESP_OK             0x00
 #define RESP_ERROR          0x01
@@ -125,6 +161,49 @@ static byte param_mem[128], train_mem[512], infer_mem[64];
 float x_train[] = {0, 0, 0, 1, 1, 0, 1, 1};
 float y_train[] = {0, 1, 1, 0};
 
+// ===== Transport Manager =====
+
+TransportManager transport;
+SpriteTransport* active_transport = nullptr;
+
+// Debug output - always goes to both interfaces
+void debug_print(const char* msg) {
+  Serial.print(msg);   // USB
+  Serial1.print(msg);  // UART
+}
+
+void debug_println(const char* msg) {
+  Serial.println(msg);
+  Serial1.println(msg);
+}
+
+// ===== Display Manager =====
+
+#if SPRITE_DISPLAY_TYPE == 1
+SSD1306Display sprite_display;
+#else
+SimulatedDisplay sprite_display;
+#endif
+
+// ===== Sprite Engine =====
+
+SpriteEngine sprite_engine;
+
+// Sprite data storage (up to 8 sprites, max 16x16 each = 32 bytes)
+#define MAX_SPRITE_DATA_SIZE 256
+static uint8_t sprite_data_pool[MAX_SPRITE_DATA_SIZE];
+static uint16_t sprite_data_used = 0;
+
+// ===== Model Manager =====
+
+ModelManager model_manager;
+
+// Upload state for chunked model upload
+static uint8_t upload_buffer[512];
+static uint16_t upload_buffer_pos = 0;
+static uint16_t upload_total_size = 0;
+static char upload_filename[32];
+
 // ===== Enhanced Utilities =====
 
 void print_progress_bar(uint8_t percent, const char* label) {
@@ -167,7 +246,7 @@ void print_memory_status() {
   Serial1.print(free / 1024);
   Serial1.print("KB free / 256KB total");
   if (free < 10000) Serial1.print(" ⚠️");
-  Serial1.println();
+  debug_println("");
 }
 
 // ===== Filesystem =====
@@ -360,14 +439,16 @@ static uint8_t rx_state = 0, rx_cmd, rx_len, rx_pos;
 static uint8_t rx_buf[64];
 
 void send_response(uint8_t cmd, uint8_t status, const uint8_t* data, uint8_t len) {
-  Serial1.write(SPRITE_HEADER);
-  Serial1.write(cmd);
-  Serial1.write(status);
-  Serial1.write(len);
+  if (!active_transport) return;
+  
+  active_transport->write(SPRITE_HEADER);
+  active_transport->write(cmd);
+  active_transport->write(status);
+  active_transport->write(len);
   if (len > 0 && data) {
-    for (uint8_t i = 0; i < len; i++) Serial1.write(data[i]);
+    for (uint8_t i = 0; i < len; i++) active_transport->write(data[i]);
   }
-  Serial1.write((uint8_t)0x00);
+  active_transport->write((uint8_t)0x00); // Checksum placeholder
 }
 
 void handle_command(uint8_t cmd, const uint8_t* payload, uint8_t len) {
@@ -393,19 +474,138 @@ void handle_command(uint8_t cmd, const uint8_t* payload, uint8_t len) {
       break;
       
     case CMD_FLUSH:
-      // Optimized: only report dirty region stats
+      // Update physical display
       if (dirty_rect.is_dirty) {
+        // Use dirty rectangle for partial update
+        sprite_display.updateRegion(framebuffer, 
+                                    dirty_rect.x1, dirty_rect.y1,
+                                    dirty_rect.x2, dirty_rect.y2);
+        
         uint16_t area = (dirty_rect.x2 - dirty_rect.x1 + 1) * 
                         (dirty_rect.y2 - dirty_rect.y1 + 1);
         #if SPRITE_VERBOSE
-        Serial1.print("[FLUSH] Dirty region: ");
+        Serial1.print("[FLUSH] Updated ");
         Serial1.print(area);
-        Serial1.println(" pixels");
+        Serial1.println(" pixels on display");
         #endif
         dirty_rect.is_dirty = false;  // Reset
+      } else {
+        // Full refresh if no dirty tracking
+        sprite_display.update(framebuffer);
       }
       send_response(cmd, RESP_OK, nullptr, 0);
       break;
+    
+    // ===== Sprite Commands =====
+    
+    case CMD_SPRITE_CREATE: {
+      // Payload: id(1) x(2) y(2) w(1) h(1) layer(1) flags(1) bitmap_data(...)
+      if (len < 8) {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+        break;
+      }
+      
+      uint8_t id = payload[0];
+      int16_t x, y;
+      memcpy(&x, payload + 1, 2);
+      memcpy(&y, payload + 3, 2);
+      uint8_t w = payload[5];
+      uint8_t h = payload[6];
+      uint8_t layer = payload[7];
+      uint8_t flags = len > 8 ? payload[8] : SPRITE_FLAG_VISIBLE;
+      
+      // Calculate bitmap size
+      uint16_t bitmap_size = ((w * h) + 7) / 8;  // Bits to bytes
+      if (9 + bitmap_size > len) {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+        break;
+      }
+      
+      // Allocate from pool
+      if (sprite_data_used + bitmap_size > MAX_SPRITE_DATA_SIZE) {
+        send_response(cmd, RESP_ERROR, nullptr, 0);  // Out of sprite memory
+        break;
+      }
+      
+      // Copy bitmap data
+      memcpy(sprite_data_pool + sprite_data_used, payload + 9, bitmap_size);
+      const uint8_t* sprite_data = sprite_data_pool + sprite_data_used;
+      sprite_data_used += bitmap_size;
+      
+      // Add sprite
+      bool ok = sprite_engine.add(id, x, y, w, h, sprite_data, flags, layer);
+      send_response(cmd, ok ? RESP_OK : RESP_ERROR, nullptr, 0);
+      break;
+    }
+    
+    case CMD_SPRITE_MOVE: {
+      // Payload: id(1) x(2) y(2)
+      if (len < 5) {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+        break;
+      }
+      
+      uint8_t id = payload[0];
+      int16_t x, y;
+      memcpy(&x, payload + 1, 2);
+      memcpy(&y, payload + 3, 2);
+      
+      bool ok = sprite_engine.move(id, x, y);
+      send_response(cmd, ok ? RESP_OK : RESP_NOT_FOUND, nullptr, 0);
+      break;
+    }
+    
+    case CMD_SPRITE_DELETE: {
+      // Payload: id(1)
+      if (len < 1) {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+        break;
+      }
+      
+      bool ok = sprite_engine.remove(payload[0]);
+      send_response(cmd, ok ? RESP_OK : RESP_NOT_FOUND, nullptr, 0);
+      break;
+    }
+    
+    case CMD_SPRITE_VISIBLE: {
+      // Payload: id(1) visible(1)
+      if (len < 2) {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+        break;
+      }
+      
+      bool ok = sprite_engine.setVisible(payload[0], payload[1] != 0);
+      send_response(cmd, ok ? RESP_OK : RESP_NOT_FOUND, nullptr, 0);
+      break;
+    }
+    
+    case CMD_SPRITE_COLLISION: {
+      // Payload: id_a(1) id_b(1)
+      if (len < 2) {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+        break;
+      }
+      
+      bool collision = sprite_engine.checkCollision(payload[0], payload[1]);
+      uint8_t result = collision ? 1 : 0;
+      send_response(cmd, RESP_OK, &result, 1);
+      break;
+    }
+    
+    case CMD_SPRITE_RENDER: {
+      // Render all sprites to framebuffer
+      sprite_engine.render(framebuffer, DISPLAY_WIDTH, DISPLAY_HEIGHT);
+      send_response(cmd, RESP_OK, nullptr, 0);
+      break;
+    }
+    
+    case CMD_SPRITE_CLEAR: {
+      // Clear all sprites
+      sprite_engine.clear();
+      sprite_data_used = 0;  // Reset data pool
+      send_response(cmd, RESP_OK, nullptr, 0);
+      break;
+    }
       
     case CMD_AI_INFER: {
       if (len >= 8 && model_ready) {
@@ -451,6 +651,123 @@ void handle_command(uint8_t cmd, const uint8_t* payload, uint8_t len) {
       break;
     }
     
+    // ===== Model Management Commands =====
+    
+    case CMD_MODEL_INFO: {
+      // Get active model info
+      ModelHeader hdr;
+      if (model_manager.getActiveInfo(&hdr)) {
+        uint8_t resp[32];
+        memcpy(resp, &hdr, sizeof(ModelHeader));
+        send_response(cmd, RESP_OK, resp, sizeof(ModelHeader));
+      } else {
+        send_response(cmd, RESP_NOT_FOUND, nullptr, 0);
+      }
+      break;
+    }
+    
+    case CMD_MODEL_LIST: {
+      // List all models
+      char models[8][32];
+      uint8_t count = model_manager.listModels(models, 8);
+      
+      if (count == 0) {
+        send_response(cmd, RESP_OK, nullptr, 0);
+      } else {
+        // Pack model names into response
+        uint8_t resp[256];
+        uint8_t pos = 0;
+        for (uint8_t i = 0; i < count; i++) {
+          uint8_t name_len = strlen(models[i]);
+          resp[pos++] = name_len;
+          memcpy(resp + pos, models[i], name_len);
+          pos += name_len;
+        }
+        send_response(cmd, RESP_OK, resp, pos);
+      }
+      break;
+    }
+    
+    case CMD_MODEL_SELECT: {
+      // Select active model by filename
+      if (len == 0 || len > 31) {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+        break;
+      }
+      
+      char filename[32];
+      memcpy(filename, payload, len);
+      filename[len] = '\0';
+      
+      bool ok = model_manager.selectModel(filename);
+      send_response(cmd, ok ? RESP_OK : RESP_NOT_FOUND, nullptr, 0);
+      break;
+    }
+    
+    case CMD_MODEL_UPLOAD: {
+      // Bulk upload model file
+      // Payload: filename_len(1) filename(...) data(...)
+      if (len < 2) {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+        break;
+      }
+      
+      uint8_t filename_len = payload[0];
+      if (filename_len == 0 || filename_len > 31 || 1 + filename_len >= len) {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+        break;
+      }
+      
+      char filename[32];
+      memcpy(filename, payload + 1, filename_len);
+      filename[filename_len] = '\0';
+      
+      uint16_t data_len = len - 1 - filename_len;
+      const uint8_t* data = payload + 1 + filename_len;
+      
+      bool ok = model_manager.uploadModel(filename, data, data_len);
+      send_response(cmd, ok ? RESP_OK : RESP_ERROR, nullptr, 0);
+      break;
+    }
+    
+    case CMD_MODEL_DELETE: {
+      // Delete model file
+      if (len == 0 || len > 31) {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+        break;
+      }
+      
+      char filename[32];
+      memcpy(filename, payload, len);
+      filename[len] = '\0';
+      
+      bool ok = model_manager.deleteModel(filename);
+      send_response(cmd, ok ? RESP_OK : RESP_NOT_FOUND, nullptr, 0);
+      break;
+    }
+    
+    case CMD_FINETUNE_START: {
+      // Start fine-tuning session on active model
+      // TODO: Implement fine-tuning logic
+      send_response(cmd, RESP_OK, nullptr, 0);
+      break;
+    }
+    
+    case CMD_FINETUNE_DATA: {
+      // Send training sample(s) for fine-tuning
+      // Payload: num_samples(1) [input_data output_data]+
+      // TODO: Implement incremental training
+      send_response(cmd, RESP_OK, nullptr, 0);
+      break;
+    }
+    
+    case CMD_FINETUNE_STOP: {
+      // End fine-tuning session, save updated weights
+      // TODO: Save fine-tuned model
+      send_response(cmd, RESP_OK, nullptr, 0);
+      break;
+    }
+    
     default:
       send_response(cmd, RESP_ERROR, nullptr, 0);
       break;
@@ -460,35 +777,50 @@ void handle_command(uint8_t cmd, const uint8_t* payload, uint8_t len) {
 // ===== Main =====
 
 void setup() {
-  Serial.begin(115200);
-  Serial1.begin(115200);
-  while (!Serial1);
+  // Initialize both transports
+  transport.begin(115200);
   delay(2000);
   
   randomSeed(analogRead(A0));
   srand(analogRead(A0));
   
-  // Enhanced startup banner
-  Serial1.println("\n\n");
-  Serial1.println("╔════════════════════════════════════════╗");
-  Serial1.print("║     SPRITE ONE v");
-  Serial1.print(SPRITE_VERSION);
-  Serial1.println("                   ║");
-  Serial1.println("║     Graphics & AI Accelerator          ║");
-  Serial1.println("╚════════════════════════════════════════╝");
-  Serial1.println();
+  // Enhanced startup banner (debug output to both interfaces)
+  debug_println("\n\n");
+  debug_println("╔════════════════════════════════════════╗");
+  debug_print("║     SPRITE ONE v");
+  debug_print(SPRITE_VERSION);
+  debug_println("                 ║");
+  debug_println("║     Graphics & AI Accelerator          ║");
+  debug_println("║     Dual Transport (UART + USB-CDC)    ║");
+  debug_print("║     Display: ");
+  debug_print(sprite_display.name());
+  for(int i = strlen(sprite_display.name()); i < 27; i++) debug_print(" ");
+  debug_println("║");
+  debug_println("╚════════════════════════════════════════╝");
+  debug_println("");
+  
+  // Initialize display
+  log_info("Initializing display...");
+  if (sprite_display.init()) {
+    debug_print("  ✓ ");
+    debug_print(sprite_display.name());
+    debug_println(" ready");
+  } else {
+    log_error("Display initialization failed!");
+  }
+  debug_println("");
   
   // System info
   log_info("System Information:");
-  Serial1.println("  CPU: RP2040 @ 133MHz");
-  Serial1.println("  Flash: 2MB");
-  Serial1.println("  RAM: 256KB");
+  debug_println("  CPU: RP2040 @ 133MHz");
+  debug_println("  Flash: 2MB");
+  debug_println("  RAM: 256KB");
   print_memory_status();
-  Serial1.println();
+  debug_println("");
   
   // Initialize filesystem
   init_fs();
-  Serial1.println();
+  debug_println("");
   
   // Initialize AI
   log_info("Initializing AI Engine...");
@@ -506,7 +838,7 @@ void setup() {
     save_model("/model.aif32");
   }
   
-  Serial1.println();
+  debug_println("");
   
   // Test XOR
   Serial1.println("┌─────────────────────────────────────────┐");
@@ -540,7 +872,7 @@ void setup() {
     log_error("Some test cases failed - may need retraining");
   }
   
-  Serial1.println();
+  debug_println("");
   Serial1.println("┌─────────────────────────────────────────┐");
   Serial1.println("│  Protocol Commands Ready                │");
   Serial1.println("├─────────────────────────────────────────┤");
@@ -550,14 +882,24 @@ void setup() {
   Serial1.println("│      SAVE(53), LOAD(54), LIST(55)       │");
   Serial1.println("│  System: VERSION(0F)                     │");
   Serial1.println("└─────────────────────────────────────────┘");
-  Serial1.println();
+  debug_println("");
   Serial1.println("Ready for commands! (AA CMD LEN DATA CHK)");
   Serial1.println("========================================\n");
 }
 
 void loop() {
-  while (Serial1.available()) {
-    uint8_t b = Serial1.read();
+  // Auto-detect active transport on first data
+  if (!active_transport) {
+    active_transport = transport.detect();
+    if (active_transport) {
+      debug_print("\n[TRANSPORT] Detected: ");
+      debug_println(active_transport->name());
+    }
+  }
+  
+  // Process data from active transport
+  if (active_transport && active_transport->available()) {
+    uint8_t b = active_transport->read();
     
     switch (rx_state) {
       case 0: if (b == SPRITE_HEADER) rx_state = 1; break;

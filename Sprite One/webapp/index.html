@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sprite Trainer</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header">
+      <h1>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"
+          style="vertical-align: middle; margin-right: 8px;">
+          <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
+        </svg>
+        Sprite Trainer
+      </h1>
+      <div class="header-actions">
+        <button class="btn-icon" id="theme-toggle" title="Toggle theme">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 0a8 8 0 100 16A8 8 0 008 0zm0 14.5V1.5a6.5 6.5 0 010 13z" />
+          </svg>
+        </button>
+        <div class="status" id="status">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text">No device</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main">
+      <!-- Left Column -->
+      <div class="column column-left">
+        <!-- Device Panel -->
+        <section class="panel" id="device-panel">
+          <div class="panel-header">
+            <h2>Devices</h2>
+            <button class="btn-icon" id="refresh-btn" title="Refresh ports">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M13.65 2.35A7.96 7.96 0 008 0a8 8 0 108 8h-2a6 6 0 11-1.76-4.24l-1.95 1.95H16V0l-2.35 2.35z" />
+              </svg>
+            </button>
+          </div>
+          <div class="device-list" id="device-list">
+            <div class="empty-state">Click refresh to scan ports</div>
+          </div>
+        </section>
+
+        <!-- Data Panel -->
+        <section class="panel" id="data-panel">
+          <div class="panel-header">
+            <h2>Training Data</h2>
+            <span class="badge" id="data-badge">0 samples</span>
+          </div>
+
+          <div class="tabs">
+            <button class="tab active" data-tab="webcam">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <circle cx="12" cy="12" r="3.5" />
+                <path
+                  d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z" />
+              </svg>
+              Webcam
+            </button>
+            <button class="tab" data-tab="files">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z" />
+              </svg>
+              Files
+            </button>
+            <button class="tab" data-tab="canvas">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path
+                  d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 000-1.41l-2.34-2.34a.996.996 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z" />
+              </svg>
+              Draw
+            </button>
+            <button class="tab" data-tab="import">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
+              </svg>
+              Import
+            </button>
+          </div>
+
+          <div class="tab-content" id="tab-webcam">
+            <div class="capture-area" id="capture-area">
+              <video id="webcam" autoplay playsinline></video>
+              <canvas id="capture-canvas" style="display: none;"></canvas>
+            </div>
+            <div class="capture-controls">
+              <input type="number" id="capture-class" value="0" min="0" placeholder="Class">
+              <button class="btn btn-secondary" id="capture-btn">Capture</button>
+            </div>
+          </div>
+
+          <div class="tab-content" id="tab-files" style="display: none;">
+            <div class="drop-zone" id="drop-zone">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" opacity="0.5">
+                <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
+              </svg>
+              <p>Drop images or folders here</p>
+              <input type="file" id="file-input" multiple accept="image/*" style="display: none;">
+              <button class="btn btn-secondary btn-sm" id="browse-btn">Browse</button>
+            </div>
+          </div>
+
+          <div class="tab-content" id="tab-canvas" style="display: none;">
+            <div class="canvas-container">
+              <canvas id="draw-canvas" width="128" height="128"></canvas>
+            </div>
+            <div class="canvas-controls">
+              <input type="number" id="draw-class" value="0" min="0" placeholder="Class">
+              <button class="btn btn-secondary btn-sm" id="add-sample">Add</button>
+              <button class="btn btn-secondary btn-sm" id="clear-canvas">Clear</button>
+            </div>
+          </div>
+
+          <div class="tab-content" id="tab-import" style="display: none;">
+            <div class="drop-zone" id="model-drop-zone">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" opacity="0.5">
+                <path
+                  d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
+              </svg>
+              <p>Drop .tflite model</p>
+              <input type="file" id="model-input" accept=".tflite,.h5" style="display: none;">
+              <button class="btn btn-secondary btn-sm" id="model-browse-btn">Browse</button>
+            </div>
+            <div id="model-info" class="model-info" style="display: none;">
+              <div class="model-header">
+                <span class="model-name" id="imported-model-name">model.tflite</span>
+                <button class="btn-icon" id="view-netron-btn" title="View in Netron">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <path
+                      d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
+                  </svg>
+                </button>
+              </div>
+              <div class="model-details" id="model-details"></div>
+              <div class="btn-group">
+                <button class="btn btn-primary btn-sm" id="convert-deploy-btn">Convert & Deploy</button>
+                <button class="btn btn-secondary btn-sm" id="download-converted-btn">Download .aif32</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="samples-preview" id="samples-preview">
+            <!-- Sample thumbnails will be added here -->
+          </div>
+
+          <div class="samples-info">
+            <span>Samples: <strong id="sample-count">0</strong></span>
+            <span>Classes: <strong id="class-count">0</strong></span>
+            <button class="btn-link" id="clear-samples-btn">Clear all</button>
+          </div>
+        </section>
+      </div>
+
+      <!-- Right Column -->
+      <div class="column column-right">
+        <!-- Training Panel -->
+        <section class="panel" id="training-panel">
+          <div class="panel-header">
+            <h2>Training</h2>
+            <div class="header-badges">
+              <span class="badge" id="backend-badge">CPU</span>
+            </div>
+          </div>
+
+          <div class="training-config">
+            <div class="form-row">
+              <div class="form-group">
+                <label>Architecture</label>
+                <select id="model-arch">
+                  <option value="mlp-small">MLP Small (2→8→N)</option>
+                  <option value="mlp" selected>MLP Medium (2→16→N)</option>
+                  <option value="mlp-large">MLP Large (2→32→N)</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Epochs</label>
+                <input type="number" id="epochs" value="50" min="1" max="1000">
+              </div>
+              <div class="form-group">
+                <label>Learning Rate</label>
+                <input type="number" id="lr" value="0.01" step="0.001" min="0.0001">
+              </div>
+              <div class="form-group">
+                <label>Batch Size</label>
+                <input type="number" id="batch-size" value="32" min="1" max="256">
+              </div>
+            </div>
+          </div>
+
+          <!-- Training Chart -->
+          <div class="chart-container" id="chart-container" style="display: none;">
+            <canvas id="training-chart" width="400" height="150"></canvas>
+            <div class="chart-legend">
+              <span class="legend-item"><span class="legend-color loss"></span> Loss</span>
+              <span class="legend-item"><span class="legend-color accuracy"></span> Accuracy</span>
+            </div>
+          </div>
+
+          <div class="progress-section" id="progress-section" style="display: none;">
+            <div class="progress-bar">
+              <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <div class="progress-info">
+              <span id="progress-text">0%</span>
+              <span id="eta-text">ETA: --</span>
+            </div>
+            <div class="metrics">
+              <div class="metric">
+                <span class="metric-label">Loss</span>
+                <span class="metric-value" id="loss-value">--</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">Accuracy</span>
+                <span class="metric-value" id="accuracy-value">--</span>
+              </div>
+              <div class="metric">
+                <span class="metric-label">Epoch</span>
+                <span class="metric-value" id="epoch-value">--</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="btn-group training-actions">
+            <button class="btn btn-primary" id="train-btn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+              Train
+            </button>
+            <button class="btn btn-secondary" id="stop-btn" style="display: none;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M6 6h12v12H6z" />
+              </svg>
+              Stop
+            </button>
+            <button class="btn btn-secondary" id="download-model-btn" disabled>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z" />
+              </svg>
+              Download
+            </button>
+            <button class="btn btn-secondary" id="deploy-btn" disabled>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                <path
+                  d="M19 12v7H5v-7H3v7c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-7h-2zm-6 .67l2.59-2.58L17 11.5l-5 5-5-5 1.41-1.41L11 12.67V3h2v9.67z" />
+              </svg>
+              Deploy
+            </button>
+          </div>
+        </section>
+
+        <!-- Model Viewer Panel -->
+        <section class="panel" id="model-panel" style="display: none;">
+          <div class="panel-header">
+            <h2>Model Architecture</h2>
+            <button class="btn-icon" id="close-model-panel">
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+                <path
+                  d="M6 4.59L10.59 0 12 1.41 7.41 6 12 10.59 10.59 12 6 7.41 1.41 12 0 10.59 4.59 6 0 1.41 1.41 0 6 4.59z" />
+              </svg>
+            </button>
+          </div>
+          <div class="model-arch-display" id="model-arch-display">
+            <!-- Layer visualization will be rendered here -->
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <!-- Console -->
+    <footer class="console" id="console">
+      <div class="console-header">
+        <span>Console</span>
+        <div class="console-actions">
+          <button class="btn-icon" id="toggle-console" title="Toggle console">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+              <path d="M6 0l6 6-6 6V0z" />
+            </svg>
+          </button>
+          <button class="btn-icon" id="clear-console" title="Clear console">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+              <path
+                d="M6 4.59L10.59 0 12 1.41 7.41 6 12 10.59 10.59 12 6 7.41 1.41 12 0 10.59 4.59 6 0 1.41 1.41 0 6 4.59z" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="console-output" id="console-output"></div>
+    </footer>
+  </div>
+
+  <script src="js/converter.js"></script>
+  <script src="js/chart.js"></script>
+  <script src="js/device.js"></script>
+  <script src="js/training.js"></script>
+  <script src="js/data_input.js"></script>
+  <script src="js/app.js"></script>
+</body>
+
+</html>

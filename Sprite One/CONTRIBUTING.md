@@ -187,8 +187,8 @@ Categories:
 
 ```bash
 # Clone your fork
-git clone https://github.com/YOUR_USERNAME/sprite-one.git
-cd sprite-one
+git clone https://github.com/Akhil-Chaturvedi/sprite-microelectronics.git
+cd sprite-microelectronics
 
 # Install Python dependencies
 cd host/python
@@ -240,7 +240,6 @@ sprite-one/
 
 - Open a [Discussion](https://github.com/sprite-microelectronics/sprite-one/discussions)
 - Ask in community chat (coming soon)
-- Email: dev@sprite-micro.com
 
 ---
 

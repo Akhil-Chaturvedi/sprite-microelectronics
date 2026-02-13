@@ -12,6 +12,8 @@ let chart = null;
 let modelVisualizer = null;
 let importedModel = null;
 let isTraining = false;
+let mockMode = false;
+let mockDevice = null;
 
 // DOM Elements
 const elements = {};
@@ -38,6 +40,27 @@ function log(message, type = '') {
 
 // Device Management
 async function scanDevices() {
+    if (mockMode) {
+        log('Using mock device', 'info');
+        mockDevice = new MockSpriteDevice();
+        // Hook up UI logging
+        mockDevice._log = (msg) => log(msg, 'info');
+        devices = [mockDevice];
+        selectDevice(mockDevice);
+        renderDevices();
+
+        // Attach simulated display
+        const displayPanel = document.getElementById('display-panel');
+        const displayCanvas = document.getElementById('sim-display-canvas');
+        if (displayPanel && displayCanvas) {
+            displayPanel.style.display = 'block';
+            mockDevice.attachDisplay(displayCanvas);
+        }
+
+        log('Mock device connected with ' + mockDevice.models.length + ' models', 'success');
+        return;
+    }
+
     log('Scanning for Sprite devices...', 'info');
     elements.deviceList.innerHTML = '<div class="empty-state">Scanning...</div>';
 
@@ -82,11 +105,12 @@ function renderDevices() {
     elements.deviceList.onclick = null;
 
     for (const dev of devices) {
+        const isMock = dev instanceof MockSpriteDevice;
         const item = document.createElement('div');
         item.className = 'device-item' + (dev === device ? ' selected' : '');
         item.innerHTML = `
       <span>${dev.getDisplayName()}</span>
-      <span class="port">${dev.portInfo?.usbProductId ? 'USB' : 'UART'}</span>
+      <span class="port">${isMock ? 'MOCK' : (dev.portInfo?.usbProductId ? 'USB' : 'UART')}</span>
     `;
         item.onclick = () => selectDevice(dev);
         elements.deviceList.appendChild(item);
@@ -98,15 +122,22 @@ function selectDevice(dev) {
     renderDevices();
     updateStatus();
     elements.deployBtn.disabled = false;
+    if (elements.convertDeployBtn && importedModel) {
+        elements.convertDeployBtn.disabled = false;
+    }
     log('Selected: ' + dev.getDisplayName(), 'info');
 }
 
 function updateStatus() {
+    elements.statusDot.classList.remove('connected', 'mock');
     if (device) {
-        elements.statusDot.classList.add('connected');
+        if (device instanceof MockSpriteDevice) {
+            elements.statusDot.classList.add('mock');
+        } else {
+            elements.statusDot.classList.add('connected');
+        }
         elements.statusText.textContent = device.getDisplayName();
     } else {
-        elements.statusDot.classList.remove('connected');
         elements.statusText.textContent = 'No device';
     }
 }
@@ -370,6 +401,53 @@ function setupWebcamCapture() {
     };
 }
 
+
+function setupTestMedia() {
+    const uploadInput = document.getElementById('test-media-upload');
+    const resetBtn = document.getElementById('reset-cam-btn');
+    const webcam = document.getElementById('webcam');
+    const testImage = document.getElementById('test-image');
+
+    if (!uploadInput) return;
+
+    uploadInput.onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        if (dataInput && dataInput.stopWebcam) dataInput.stopWebcam(); // Stop live stream if any
+
+        const url = URL.createObjectURL(file);
+
+        if (file.type.startsWith('image/')) {
+            webcam.style.display = 'none';
+            testImage.style.display = 'block';
+            testImage.src = url;
+            testImage.dataset.isTest = "true";
+        } else if (file.type.startsWith('video/')) {
+            testImage.style.display = 'none';
+            webcam.style.display = 'block';
+            webcam.srcObject = null;
+            webcam.src = url;
+            webcam.loop = true;
+            webcam.play();
+        }
+
+        resetBtn.style.display = 'inline-block';
+        log(`Loaded test media: ${file.name}`, 'info');
+    };
+
+    resetBtn.onclick = () => {
+        webcam.src = "";
+        webcam.srcObject = null;
+        testImage.style.display = 'none';
+        webcam.style.display = 'block';
+        if (dataInput && dataInput.initWebcam) dataInput.initWebcam(webcam);
+        resetBtn.style.display = 'none';
+        uploadInput.value = "";
+        log('Switched back to live webcam', 'info');
+    };
+}
+
 // Model Import
 function setupModelImport() {
     const dropZone = document.getElementById('model-drop-zone');
@@ -386,6 +464,7 @@ function setupModelImport() {
     fileInput.onchange = async (e) => {
         if (e.target.files.length) {
             await processModelFile(e.target.files[0]);
+            e.target.value = ''; // Reset so same file can be selected again
         }
     };
 
@@ -401,10 +480,10 @@ function setupModelImport() {
         dropZone.classList.remove('dragover');
 
         const file = e.dataTransfer.files[0];
-        if (file && (file.name.endsWith('.tflite') || file.name.endsWith('.h5'))) {
+        if (file && (file.name.endsWith('.tflite') || file.name.endsWith('.h5') || file.name.endsWith('.aif32'))) {
             await processModelFile(file);
         } else {
-            log('Please drop a .tflite or .h5 file', 'error');
+            log('Please drop a .tflite, .h5, or .aif32 file', 'error');
         }
     };
 
@@ -452,10 +531,44 @@ async function processModelFile(file) {
 
     try {
         const buffer = await file.arrayBuffer();
-        const result = convertTFLiteToAIFes(buffer, file.name.replace(/\.(tflite|h5)$/, ''));
+        let result;
+
+        if (file.name.endsWith('.aif32')) {
+            // Direct load for AIF32 files
+            log('Loading pre-compiled AIF32 model...', 'info');
+
+            const dv = new DataView(buffer);
+            const magic = dv.getUint32(0, true);
+            let info = {
+                inputSize: '?',
+                outputSize: '?',
+                hiddenSize: '?',
+                numLayers: '?',
+                numWeights: buffer.byteLength / 4,
+                originalSize: buffer.byteLength,
+                convertedSize: buffer.byteLength
+            };
+
+            if (magic === 0x54525053) { // "SPRT"
+                info.version = dv.getUint16(4, true);
+                info.inputSize = dv.getUint8(6);
+                info.outputSize = dv.getUint8(7);
+                info.hiddenSize = dv.getUint8(8);
+                // info.modelType = dv.getUint8(9);
+                info.numLayers = dv.getUint8(10);
+            }
+
+            result = {
+                data: new Uint8Array(buffer),
+                info: info
+            };
+        } else {
+            // Convert TFLite/Keras
+            result = convertTFLiteToAIFes(buffer, file.name.replace(/\.(tflite|h5)$/, ''));
+        }
 
         importedModel = {
-            name: file.name.replace(/\.(tflite|h5)$/, ''),
+            name: file.name.replace(/\.(tflite|h5|aif32)$/, ''),
             data: result.data,
             info: result.info,
             originalFile: file
@@ -480,8 +593,11 @@ async function processModelFile(file) {
 
         if (modelInfo) modelInfo.style.display = 'block';
 
-        const convertBtn = document.getElementById('convert-deploy-btn');
-        if (convertBtn) convertBtn.disabled = !device;
+        if (modelInfo) modelInfo.style.display = 'block';
+
+        if (elements.convertDeployBtn) {
+            elements.convertDeployBtn.disabled = !device;
+        }
 
         log(`Converted: ${result.info.numLayers} layers, ${result.info.numWeights.toLocaleString()} weights`, 'success');
 
@@ -558,6 +674,7 @@ document.addEventListener('DOMContentLoaded', () => {
     elements.trainBtn = document.getElementById('train-btn');
     elements.stopBtn = document.getElementById('stop-btn');
     elements.deployBtn = document.getElementById('deploy-btn');
+    elements.convertDeployBtn = document.getElementById('convert-deploy-btn');
     elements.downloadModelBtn = document.getElementById('download-model-btn');
     elements.progressSection = document.getElementById('progress-section');
     elements.chartContainer = document.getElementById('chart-container');
@@ -631,10 +748,107 @@ document.addEventListener('DOMContentLoaded', () => {
     setupDrawCanvas();
     setupFileInput();
     setupWebcamCapture();
+    setupTestMedia();
     setupModelImport();
     setupConsole();
+    setupMockDevice();
 
     // Initial log
     log('Sprite Trainer v2.0 initialized', 'info');
-    log('Click refresh to scan for devices', 'info');
+    log('Toggle "Mock" to use simulated device, or click refresh to scan', 'info');
 });
+
+// Mock device setup
+function setupMockDevice() {
+    const toggle = document.getElementById('mock-toggle');
+    if (!toggle) return;
+
+    toggle.onchange = () => {
+        mockMode = toggle.checked;
+        const displayPanel = document.getElementById('display-panel');
+
+        if (mockMode) {
+            log('Mock mode enabled', 'info');
+            scanDevices(); // Auto-connect mock
+        } else {
+            log('Mock mode disabled', 'info');
+            if (displayPanel) displayPanel.style.display = 'none';
+            device = null;
+            mockDevice = null;
+            devices = [];
+            elements.deviceList.innerHTML = '<div class="empty-state">Click refresh to scan ports</div>';
+            updateStatus();
+        }
+    };
+
+    // Sim display controls
+    const simClear = document.getElementById('sim-clear');
+    const simDemo = document.getElementById('sim-demo');
+    const simInfer = document.getElementById('sim-infer');
+
+    if (simClear) {
+        simClear.onclick = () => {
+            if (mockDevice) {
+                mockDevice.sendCommand(0x10, [0]); // Clear
+                mockDevice.sendCommand(0x2F); // Flush
+                log('Display cleared', 'info');
+            }
+        };
+    }
+
+    if (simDemo) {
+        simDemo.onclick = async () => {
+            if (!mockDevice) return;
+            log('Drawing demo pattern...', 'info');
+
+            // Clear
+            await mockDevice.sendCommand(0x10, [0]);
+
+            // Draw border rect
+            await mockDevice.sendCommand(0x12, [0, 0, 128, 64, 1]);
+            // Draw inner black rect
+            await mockDevice.sendCommand(0x12, [2, 2, 124, 60, 0]);
+
+            // Draw some rects as a pattern
+            for (let i = 0; i < 5; i++) {
+                const x = 10 + i * 22;
+                const y = 10;
+                const w = 16;
+                const h = 16 + i * 6;
+                await mockDevice.sendCommand(0x12, [x, y, w, h, 1]);
+            }
+
+            // Draw pixels as dots
+            for (let i = 0; i < 20; i++) {
+                const x = Math.floor(Math.random() * 128);
+                const y = Math.floor(Math.random() * 64);
+                await mockDevice.sendCommand(0x11, [x, y, 1]);
+            }
+
+            await mockDevice.sendCommand(0x2F); // Flush
+            log('Demo pattern drawn', 'success');
+        };
+    }
+
+    if (simInfer) {
+        simInfer.onclick = async () => {
+            if (!mockDevice) return;
+
+            const tests = [[0, 0], [0, 1], [1, 0], [1, 1]];
+            log('Running XOR inference test...', 'info');
+
+            for (const [a, b] of tests) {
+                const payload = new Uint8Array(8);
+                const dv = new DataView(payload.buffer);
+                dv.setFloat32(0, a, true);
+                dv.setFloat32(4, b, true);
+                const resp = await mockDevice.sendCommand(0x50, payload);
+
+                if (resp && resp.length >= 7) {
+                    const result = new DataView(resp.buffer, resp.byteOffset + 3).getFloat32(0, true);
+                    log(`  ${a} XOR ${b} = ${result.toFixed(3)}`, 'success');
+                }
+            }
+        };
+    }
+}

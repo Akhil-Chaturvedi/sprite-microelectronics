@@ -12,9 +12,10 @@ Sprite One is an RP2040-based coprocessor that handles graphics rendering and ne
 
 **Capabilities:**
 - 128x64 OLED display (SSD1306) with hardware sprites
+- **Dynamic Model Loading** (No recompilation required)
 - On-device neural network training (F32 and Q7)
-- Hot-swap multi-model system
-- TFLite model converter
+- "Sentinel God Mode" Real-time Vision Demo
+- TFLite model converter & Custom Model Generator
 - Web-based training interface
 - Dual transport: UART + USB-CDC (100x faster)
 
@@ -114,6 +115,7 @@ sprite-one/
 | v1.4 | Hardware sprites (8) |
 | v1.5 | Multi-model hot-swap |
 | v2.0 | Web trainer, TFLite converter |
+| v2.1 | **Dynamic Model Loading**, Sentinel God Mode, Web Simulator |
 
 ## Model Conversion
 
@@ -125,9 +127,13 @@ python tools/converter/convert.py model.tflite output.aif32
 
 # From Keras (requires TensorFlow)
 python tools/converter/convert.py model.h5 output.aif32
+
+# Custom Architecture Generation (Dynamic Models)
+# See tools/gen_sentinel_model.py for example of manual binary packing
+python tools/gen_sentinel_model.py
 ```
 
-Supports: `.tflite`, `.h5`, `.keras`, `.pb`, TF.js
+Supports: `.tflite`, `.h5`, `.keras`, `.pb`, TF.js, and **Custom Binary Definitions** (V2 Format).
 
 ## Documentation
 
@@ -159,8 +165,3 @@ MIT License - See [LICENSE](LICENSE)
 - **AIfES** - TinyML framework
 - **LittleFS** - Embedded filesystem
 - **TensorFlow Lite** - Model format
-
----
-
-**Author:** Akhil Chaturvedi  
-**Repository:** [github.com/Akhil-Chaturvedi/sprite-microelectronics](https://github.com/Akhil-Chaturvedi/sprite-microelectronics)

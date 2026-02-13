@@ -110,6 +110,11 @@ public:
     
     snprintf(active_model_path, sizeof(active_model_path), "/models/%s", filename);
     memcpy(&active_header, &hdr, sizeof(ModelHeader));
+    // Verify file exists and is readable
+    File f = LittleFS.open(active_model_path, "r");
+    if (!f) return false;
+    f.close();
+
     has_active_model = true;
     
     return true;

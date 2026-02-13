@@ -20,11 +20,10 @@
         Sprite Trainer
       </h1>
       <div class="header-actions">
-        <button class="btn-icon" id="theme-toggle" title="Toggle theme">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
-            <path d="M8 0a8 8 0 100 16A8 8 0 008 0zm0 14.5V1.5a6.5 6.5 0 010 13z" />
-          </svg>
-        </button>
+        <label class="mock-toggle" title="Use simulated device (no hardware needed)">
+          <input type="checkbox" id="mock-toggle">
+          <span class="mock-label">Mock</span>
+        </label>
         <div class="status" id="status">
           <span class="status-dot" id="status-dot"></span>
           <span id="status-text">No device</span>
@@ -90,12 +89,21 @@
 
           <div class="tab-content" id="tab-webcam">
             <div class="capture-area" id="capture-area">
-              <video id="webcam" autoplay playsinline></video>
+              <video id="webcam" autoplay playsinline muted loop></video>
+              <img id="test-image" style="display: none; max-width: 100%; max-height: 100%; object-fit: contain;">
               <canvas id="capture-canvas" style="display: none;"></canvas>
             </div>
             <div class="capture-controls">
               <input type="number" id="capture-class" value="0" min="0" placeholder="Class">
               <button class="btn btn-secondary" id="capture-btn">Capture</button>
+            </div>
+            <div class="test-media-controls" style="margin-top: 10px; border-top: 1px solid #333; padding-top: 10px;">
+              <label class="btn btn-secondary btn-sm" style="display: inline-block; cursor: pointer;">
+                Upload Test Video/Image
+                <input type="file" id="test-media-upload" accept="image/*,video/*" style="display: none;">
+              </label>
+              <button class="btn btn-secondary btn-sm" id="reset-cam-btn" style="display: none;">Reset to
+                Webcam</button>
             </div>
           </div>
 
@@ -127,8 +135,8 @@
                 <path
                   d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" />
               </svg>
-              <p>Drop .tflite model</p>
-              <input type="file" id="model-input" accept=".tflite,.h5" style="display: none;">
+              <p>Drop .tflite, .h5, or .aif32</p>
+              <input type="file" id="model-input" accept=".tflite,.h5,.aif32" style="display: none;">
               <button class="btn btn-secondary btn-sm" id="model-browse-btn">Browse</button>
             </div>
             <div id="model-info" class="model-info" style="display: none;">
@@ -272,8 +280,22 @@
               </svg>
             </button>
           </div>
-          <div class="model-arch-display" id="model-arch-display">
-            <!-- Layer visualization will be rendered here -->
+          <div class="model-arch-display" id="model-arch-display"></div>
+        </section>
+
+        <!-- Simulated Display (mock device only) -->
+        <section class="panel" id="display-panel" style="display: none;">
+          <div class="panel-header">
+            <h2>Simulated Display</h2>
+            <span class="badge">128×64</span>
+          </div>
+          <div class="sim-display">
+            <canvas id="sim-display-canvas" width="384" height="192"></canvas>
+          </div>
+          <div class="sim-controls">
+            <button class="btn btn-secondary btn-sm" id="sim-clear">Clear</button>
+            <button class="btn btn-secondary btn-sm" id="sim-demo">Demo Pattern</button>
+            <button class="btn btn-secondary btn-sm" id="sim-infer">Test Infer</button>
           </div>
         </section>
       </div>
@@ -301,9 +323,12 @@
     </footer>
   </div>
 
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.11.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.2"></script>
   <script src="js/converter.js"></script>
   <script src="js/chart.js"></script>
   <script src="js/device.js"></script>
+  <script src="js/mock_device.js"></script>
   <script src="js/training.js"></script>
   <script src="js/data_input.js"></script>
   <script src="js/app.js"></script>

@@ -1,6 +1,6 @@
 # Sprite Microelectronics
 
-Electronics projects by Akhil Chaturvedi.
+Sprite Electronics projects
 
 ## Projects
 

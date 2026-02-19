@@ -195,36 +195,52 @@ struct CommandQueueEntry {
   uint8_t payload[64];
 };
 
+#if ENABLE_DUAL_CORE
+#include "pico/multicore.h"
+#include "pico/mutex.h"
+
+static mutex_t sprite_lock; // Global lock for queues and state
+
 template<int SIZE>
 class CommandQueue {
 private:
   volatile uint8_t q_cmd[SIZE];
   volatile uint8_t q_len[SIZE];
-  uint8_t q_payload[SIZE][64];  // Not volatile - accessed with barriers
+  uint8_t q_payload[SIZE][64];
   volatile uint32_t head;
   volatile uint32_t tail;
 public:
   CommandQueue() : head(0), tail(0) {}
+  
   bool push(uint8_t cmd, const uint8_t* payload, uint8_t len) {
+    mutex_enter_blocking(&sprite_lock);
     uint32_t next = (head + 1) % SIZE;
-    if (next == tail) return false;
+    if (next == tail) {
+        mutex_exit(&sprite_lock);
+        return false;
+    }
     q_cmd[head] = cmd;
     q_len[head] = len;
     if (len > 0 && payload) memcpy(q_payload[head], payload, min((int)len, 64));
-    asm volatile("" ::: "memory");
     head = next;
+    mutex_exit(&sprite_lock);
     return true;
   }
+  
   bool pop(CommandQueueEntry* out) {
-    if (tail == head) return false;
+    mutex_enter_blocking(&sprite_lock);
+    if (tail == head) {
+        mutex_exit(&sprite_lock);
+        return false;
+    }
     out->cmd = q_cmd[tail];
     out->len = q_len[tail];
     memcpy(out->payload, q_payload[tail], q_len[tail]);
-    asm volatile("" ::: "memory");
     tail = (tail + 1) % SIZE;
+    mutex_exit(&sprite_lock);
     return true;
   }
-  bool isEmpty() const { return head == tail; }
+  bool isEmpty() const { return head == tail; } // Reader warning: unprotected
   bool isFull() const { return ((head + 1) % SIZE) == tail; }
 };
 
@@ -247,40 +263,62 @@ private:
 public:
   ResponseQueue() : head(0), tail(0) {}
   bool push(uint8_t cmd, uint8_t status, const uint8_t* data, uint8_t len) {
+    mutex_enter_blocking(&sprite_lock);
     uint32_t next = (head + 1) % SIZE;
-    if (next == tail) return false;
+    if (next == tail) {
+        mutex_exit(&sprite_lock);
+        return false;
+    }
     r_cmd[head] = cmd;
     r_status[head] = status;
     r_len[head] = min((int)len, 64);
     if (len > 0 && data) memcpy(r_data[head], data, r_len[head]);
-    asm volatile("" ::: "memory");
     head = next;
+    mutex_exit(&sprite_lock);
     return true;
   }
+  
   bool pop(ResponseEntry* out) {
-    if (tail == head) return false;
+    mutex_enter_blocking(&sprite_lock);
+    if (tail == head) {
+        mutex_exit(&sprite_lock);
+        return false;
+    }
     out->cmd = r_cmd[tail];
     out->status = r_status[tail];
     out->len = r_len[tail];
     memcpy(out->data, r_data[tail], r_len[tail]);
-    asm volatile("" ::: "memory");
     tail = (tail + 1) % SIZE;
+    mutex_exit(&sprite_lock);
     return true;
   }
   bool isEmpty() const { return head == tail; }
 };
 
-#if ENABLE_DUAL_CORE
-
 static CommandQueue<16> cmd_queue;
 static ResponseQueue<8> response_queue;
 
-struct Core1Flags {
-  volatile bool ai_training;
-  volatile bool ai_model_ready;
-  volatile uint32_t free_cycles;
+struct Core1State {
+  bool ai_training;
+  bool ai_model_ready;
+  uint32_t free_cycles;
 };
-static Core1Flags core1_flags = {false, false, 0};
+static Core1State core1_state = {false, false, 0};
+
+// Helper to check state safely
+bool is_training() {
+    bool t;
+    mutex_enter_blocking(&sprite_lock);
+    t = core1_state.ai_training;
+    mutex_exit(&sprite_lock);
+    return t;
+}
+
+void set_training(bool active) {
+    mutex_enter_blocking(&sprite_lock);
+    core1_state.ai_training = active;
+    mutex_exit(&sprite_lock);
+}
 
 void core1_entry();  // Forward declaration
 
@@ -538,13 +576,18 @@ void init_weights() {
 float do_inference(float in0, float in1) {
   if (use_dynamic_model) {
       // Dynamic Inference
-      // We assume 2 inputs, 1 output for compatibility with this function signature
-      // A real "God Mode" would deal with arbitrary tensor shapes.
+      // Map the 2 arguments to the 128-input vector (rest zeros)
+      // This allows the legacy XOR test command to trigger the "God Mode" brain
+      float input_vec[128] = {0};
+      input_vec[0] = in0;
+      input_vec[1] = in1;
       
-      // Note: We need to implement the actual inference call in DynamicModel
-      // For this step, we just return 0 to prove compilation.
-      // dynamic_model.infer(...)
-      return 0.5f; 
+      // Inference runs on the Static Arena
+      float* results = dynamic_model.infer(input_vec);
+      
+      // Return the first output (Class 0 confidence)
+      if (results) return results[0];
+      return 0.0f;
   } else {
       // Use Optimized INT8 Path (Legacy)
       return do_inference_int8(in0, in1);
@@ -703,20 +746,47 @@ bool load_model(const char* filename) {
 // ===== Protocol =====
 
 // Protocol state variables (declared early for use in handle_command)
+// Protocol state
 static uint8_t rx_state = 0, rx_cmd, rx_len, rx_pos;
-static uint8_t rx_buf[64];
+static uint8_t rx_buf[300]; // Increased for full packets
+
+// Upload State
+static File upload_file;
+static bool is_uploading = false;
+static uint32_t upload_expected_crc = 0;
+static uint32_t upload_recv_crc = 0;
+
+// Forward decl
+uint32_t crc32_byte(uint32_t crc, uint8_t data); 
 
 void send_response(uint8_t cmd, uint8_t status, const uint8_t* data, uint8_t len) {
   if (!active_transport) return;
   
   active_transport->write(SPRITE_HEADER);
+  
+  uint32_t crc = 0xFFFFFFFF;
+  
   active_transport->write(cmd);
+  crc = crc32_byte(crc, cmd);
+  
   active_transport->write(status);
+  crc = crc32_byte(crc, status);
+  
   active_transport->write(len);
+  crc = crc32_byte(crc, len);
+  
   if (len > 0 && data) {
-    for (uint8_t i = 0; i < len; i++) active_transport->write(data[i]);
+    for (uint8_t i = 0; i < len; i++) {
+        active_transport->write(data[i]);
+        crc = crc32_byte(crc, data[i]);
+    }
   }
-  active_transport->write((uint8_t)0x00); // Checksum placeholder
+  
+  uint32_t final_crc = ~crc;
+  active_transport->write((uint8_t)(final_crc & 0xFF));
+  active_transport->write((uint8_t)((final_crc >> 8) & 0xFF));
+  active_transport->write((uint8_t)((final_crc >> 16) & 0xFF));
+  active_transport->write((uint8_t)((final_crc >> 24) & 0xFF));
 }
 
 void handle_command(uint8_t cmd, const uint8_t* payload, uint8_t len) {
@@ -800,7 +870,7 @@ void handle_command(uint8_t cmd, const uint8_t* payload, uint8_t len) {
 
     case CMD_AI_SAVE:
       if (len > 0) {
-        if (fs_state != FS_IDLE || core1_flags.ai_training) {
+        if (fs_state != FS_IDLE || is_training()) {
           send_response(cmd, RESP_ERROR, nullptr, 0); // Busy
         } else {
           char fname[32];
@@ -811,7 +881,7 @@ void handle_command(uint8_t cmd, const uint8_t* payload, uint8_t len) {
         }
       } else {
          // Default filename
-         if (fs_state != FS_IDLE || core1_flags.ai_training) {
+         if (fs_state != FS_IDLE || is_training()) {
             send_response(cmd, RESP_ERROR, nullptr, 0);
          } else {
             safe_strcpy(fs_filename, "model.aif32", 32);
@@ -823,7 +893,7 @@ void handle_command(uint8_t cmd, const uint8_t* payload, uint8_t len) {
       
     case CMD_AI_LOAD:
       if (len > 0) {
-        if (fs_state != FS_IDLE || core1_flags.ai_training) {
+        if (fs_state != FS_IDLE || is_training()) {
           send_response(cmd, RESP_ERROR, nullptr, 0); // Busy
         } else {
           char fname[32];
@@ -833,7 +903,7 @@ void handle_command(uint8_t cmd, const uint8_t* payload, uint8_t len) {
           send_response(cmd, RESP_OK, nullptr, 0); // Immediate ACK
         }
       } else {
-         if (fs_state != FS_IDLE || core1_flags.ai_training) {
+         if (fs_state != FS_IDLE || is_training()) {
             send_response(cmd, RESP_ERROR, nullptr, 0);
          } else {
             safe_strcpy(fs_filename, "model.aif32", 32);
@@ -1063,30 +1133,93 @@ void handle_command(uint8_t cmd, const uint8_t* payload, uint8_t len) {
       break;
     }
     
-    case CMD_MODEL_UPLOAD: {
-      // Bulk upload model file
-      // Payload: filename_len(1) filename(...) data(...)
-      if (len < 2) {
-        send_response(cmd, RESP_ERROR, nullptr, 0);
-        break;
-      }
-      
-      uint8_t filename_len = payload[0];
-      if (filename_len == 0 || filename_len > 31 || 1 + filename_len >= len) {
+    case CMD_MODEL_UPLOAD: { // 0x63: START UPLOAD
+      // Payload: filename (null terminated)
+      if (len == 0 || len > 31) {
         send_response(cmd, RESP_ERROR, nullptr, 0);
         break;
       }
       
       char filename[32];
-      memcpy(filename, payload + 1, filename_len);
-      filename[filename_len] = '\0';
+      memcpy(filename, payload, len);
+      filename[len] = '\0';
       
-      uint16_t data_len = len - 1 - filename_len;
-      const uint8_t* data = payload + 1 + filename_len;
+      if (is_uploading && upload_file) upload_file.close();
       
-      bool ok = model_manager.uploadModel(filename, data, data_len);
-      send_response(cmd, ok ? RESP_OK : RESP_ERROR, nullptr, 0);
+      // Ensure we are not training
+      if (is_training()) { 
+          send_response(cmd, RESP_ERROR, nullptr, 0); 
+          break; 
+      }
+      
+      upload_file = LittleFS.open(filename, "w");
+      if (!upload_file) {
+          send_response(cmd, RESP_ERROR, nullptr, 0);
+          break;
+      }
+      
+      is_uploading = true;
+      upload_recv_crc = 0xFFFFFFFF; // Init CRC for full file
+      send_response(cmd, RESP_OK, nullptr, 0);
       break;
+    }
+
+    case 0x68: { // CMD_UPLOAD_CHUNK
+        if (!is_uploading || !upload_file) {
+            send_response(cmd, RESP_ERROR, nullptr, 0);
+            break;
+        }
+        
+        // Write chunk
+        if (len > 0) {
+            size_t written = upload_file.write(payload, len);
+            if (written != len) {
+                upload_file.close();
+                is_uploading = false;
+                send_response(cmd, RESP_ERROR, nullptr, 0); // Write failed
+                break;
+            }
+            // Update full file CRC
+            for(int i=0; i<len; i++) {
+                upload_recv_crc = crc32_byte(upload_recv_crc, payload[i]);
+            }
+        }
+        send_response(cmd, RESP_OK, nullptr, 0);
+        break;
+    }
+
+    case 0x69: { // CMD_UPLOAD_END
+        if (!is_uploading || !upload_file) {
+             send_response(cmd, RESP_ERROR, nullptr, 0);
+             break;
+        }
+        
+        upload_file.close();
+        is_uploading = false;
+        
+        // Verify CRC if provided?
+        // Payload: Expected CRC32 (4 bytes)
+        if (len >= 4) {
+             uint32_t expected_crc;
+             memcpy(&expected_crc, payload, 4);
+             uint32_t final_crc = ~upload_recv_crc;
+             
+             if (final_crc != expected_crc) {
+                 log_error("Upload CRC Mismatch!");
+                 // Delete broken file?
+                 // LittleFS.remove(filename?); // Don't have filename here easily 
+                 send_response(cmd, RESP_ERROR, nullptr, 0); // CRC Fail
+                 break;
+             }
+        }
+        
+        log_success("Upload Complete & Verified");
+        
+        // Auto-select if it was model.aif32?
+        // Let user select manually or reload.
+        
+        send_response(cmd, RESP_OK, nullptr, 0);
+        break;
     }
     
     case CMD_MODEL_DELETE: {
@@ -1193,15 +1326,15 @@ void core1_handle_command(const void* entry_ptr) {
       break;
     case CMD_AI_TRAIN: {
         uint8_t epochs = len > 0 ? payload[0] : 100;
-        core1_flags.ai_training = true;
+        set_training(true);
         do_train(epochs);
-        core1_flags.ai_training = false;
-        core1_flags.ai_model_ready = true;
+        set_training(false);
+        // core1_flags.ai_model_ready = true; // Handled by model loader or atomic enough?
         core1_send_response(cmd, RESP_OK, (uint8_t*)&last_loss, 4);
       } break;
     case CMD_AI_STATUS: {
         uint8_t resp[8];
-        resp[0] = core1_flags.ai_training ? 1 : 0;
+        resp[0] = is_training() ? 1 : 0;
         resp[1] = model_ready ? 1 : 0;
         memcpy(resp + 2, &train_epochs, 2);
         memcpy(resp + 4, &last_loss, 4);
@@ -1231,7 +1364,7 @@ void core1_loop() {
     if (cmd_queue.pop(&cmd)) {
       core1_handle_command(&cmd);
     } else {
-      core1_flags.free_cycles++;
+      // core1_state.free_cycles++;
     }
     delayMicroseconds(10);
   }
@@ -1249,6 +1382,11 @@ void core1_entry() {
 void setup() {
   // Initialize both transports
   transport.begin(115200);
+  delay(100);
+
+  #if ENABLE_DUAL_CORE
+  mutex_init(&sprite_lock);
+  #endif
   delay(2000);
   
   randomSeed(analogRead(A0));

@@ -653,7 +653,6 @@ input[type="number"] {
   color: var(--text-primary);
 }
 
-/* Model Architecture Visualization */
 .model-arch-display {
   padding: 16px;
   overflow-x: auto;
@@ -726,7 +725,6 @@ input[type="number"] {
   border: 1px solid var(--border);
 }
 
-/* Console */
 .console {
   background: var(--bg-primary);
   border-top: 1px solid var(--border);
@@ -815,7 +813,6 @@ input[type="number"] {
   background: var(--text-muted);
 }
 
-/* Animations */
 @keyframes pulse {
 
   0%,
@@ -832,10 +829,10 @@ input[type="number"] {
   animation: pulse 1.5s infinite;
 }
 
-/* Utility */
 .hidden {
   display: none !important;
 }
+
 .mock-toggle {
   display: flex;
   align-items: center;
@@ -853,25 +850,18 @@ input[type="number"] {
   border-color: var(--text-muted);
 }
 
-/* --- FIXED CHECKBOX STYLE --- */
 .mock-toggle input {
-  /* 1. Remove default browser styling */
-  appearance: none; 
+  appearance: none;
   -webkit-appearance: none;
   -moz-appearance: none;
 
-  /* 2. Force Square Shape */
   width: 14px !important;
   height: 14px !important;
-  min-width: 14px; 
-  flex-shrink: 0; /* Prevents squishing by flex container */
-  
-  /* 3. Colors & Borders */
-  border: 1.5px solid var(--text-muted);
+  min-width: 14px;
+  flex-shrink: 0;
+  border: 1.5px solid var(--border);
   border-radius: 3px;
-  background: var(--bg-secondary); /* Dark unchecked background */
-  
-  /* 4. Layout */
+  background: var(--bg-secondary);
   cursor: pointer;
   margin: 0;
   position: relative;
@@ -883,16 +873,12 @@ input[type="number"] {
   border-color: var(--accent);
 }
 
-/* --- FIXED CHECKMARK CENTERING --- */
 .mock-toggle input:checked::after {
   content: '';
   position: absolute;
-  /* Mathematically center the tick */
   left: 50%;
-  top: 45%; 
+  top: 45%;
   transform: translate(-50%, -50%) rotate(45deg);
-  
-  /* Tick Shape */
   width: 4px;
   height: 8px;
   border: solid var(--bg-primary);
@@ -913,7 +899,6 @@ input[type="number"] {
   color: var(--accent);
 }
 
-/* Simulated Display */
 .sim-display {
   background: #000;
   border-radius: var(--radius);
@@ -936,7 +921,6 @@ input[type="number"] {
   gap: 7px;
 }
 
-/* Mock status indicator */
 .status-dot.mock {
   background: var(--warning);
   box-shadow: 0 0 6px var(--warning);

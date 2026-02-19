@@ -10,7 +10,7 @@
 #include <Arduino.h>
 #include "pico_perf.h"
 #include "sio_acceleration.h"
-#include "ghost_ram.h"
+// #include "ghost_ram.h"  // REMOVED: Unsafe/Stub
 #include "reflex_arc.h"
 #include "sentinel_model.h"
 
@@ -70,8 +70,6 @@ void setup() {
     Serial.begin(115200);
     perf.begin();
     
-    // Initialize "Ghost RAM"
-    GhostRAM::reclaim();
     
     // Initialize Vector Memory
     memory.count = 0;
@@ -106,41 +104,13 @@ void loop() {
         inferences++;
         reflex_triggered = false; // Acknowledge reflex
         
-        // Simulating Multi-Head Inference Results
-        // ---------------------------------------
+        // Waiting for HOST to send Feature Vector...
+        // Real architecture:
+        // 1. Host (PC/Phone) runs Vision (MobileNet)
+        // 2. Host sends 128-float Embedding via Serial
+        // 3. SerialEvent() captures it and triggers "Real" Vector Brain lookup.
         
-        // Head 1: Classification
-        Serial.println("[VISION] Class: 'Person' (0.95)");
-        
-        // Head 2: Depth Map (28x28)
-        // Simulate checking center pixel depth
-        float center_depth = 1.5f; 
-        Serial.printf("[DEPTH] Center Disparity: %.2fm\n", center_depth);
-        
-        // Head 4: Saliency Map (7x7)
-        // Simulate checking max attention point
-        int focus_x = 3, focus_y = 3;
-        Serial.printf("[ATTN] Foveating on grid [%d, %d]\n", focus_x, focus_y);
-        
-        // Head 5: Anomaly Score (Autoencoder)
-        float anomaly = 0.02f;
-        if (anomaly > 0.5f) Serial.println("[ALERT] Anomaly Detected!");
-
-        // Head 3: Vector Embedding (128-d)
-        // Simulating capturing a "Vector" from the camera logic
-        float current_view[128];
-        for(int i=0; i<128; i++) current_view[i] = (float)random(100)/100.0;
-        
-        // Consult Vector Brain
-        int match = memory.find_match(current_view);
-        if (match != -1) {
-            Serial.printf("[BRAIN] Recognized: %s (Conf: %d%%)\n", 
-                          memory.entries[match].label, 
-                          memory.entries[match].confidence);
-        } else {
-            Serial.println("[BRAIN] Unknown Object. Learning...");
-            memory.add_vector(current_view, "New Object");
-        }
+        Serial.println("[SENTINEL] Reflex Active. Waiting for Vision Vector...");
     }
     
     // 3. IDLE THOUGHTS

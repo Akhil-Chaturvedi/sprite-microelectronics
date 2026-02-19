@@ -42,22 +42,39 @@ function log(message, type = '') {
 async function scanDevices() {
     if (mockMode) {
         log('Using mock device', 'info');
-        mockDevice = new MockSpriteDevice();
-        // Hook up UI logging
-        mockDevice._log = (msg) => log(msg, 'info');
-        devices = [mockDevice];
-        selectDevice(mockDevice);
-        renderDevices();
+        try {
+            console.log('[App] typeof MockSpriteDevice:', typeof MockSpriteDevice);
+            console.log('[App] window.MockSpriteDevice:', typeof window.MockSpriteDevice);
 
-        // Attach simulated display
-        const displayPanel = document.getElementById('display-panel');
-        const displayCanvas = document.getElementById('sim-display-canvas');
-        if (displayPanel && displayCanvas) {
-            displayPanel.style.display = 'block';
-            mockDevice.attachDisplay(displayCanvas);
+            if (typeof MockSpriteDevice === 'undefined') {
+                throw new Error('MockSpriteDevice class is not available. Check if mock_device.js loaded correctly.');
+            }
+
+            mockDevice = new MockSpriteDevice();
+            // Hook up UI logging
+            mockDevice._log = (msg) => log(msg, 'info');
+            devices = [mockDevice];
+            log('Device array set, length: ' + devices.length, 'info');
+
+            selectDevice(mockDevice);
+            log('Device selected: ' + device.getDisplayName(), 'info');
+
+            renderDevices();
+            log('Devices rendered to UI', 'info');
+
+            // Attach simulated display
+            const displayPanel = document.getElementById('display-panel');
+            const displayCanvas = document.getElementById('sim-display-canvas');
+            if (displayPanel && displayCanvas) {
+                displayPanel.style.display = 'block';
+                mockDevice.attachDisplay(displayCanvas);
+            }
+
+            log('Mock device connected with ' + mockDevice.models.length + ' models', 'success');
+        } catch (err) {
+            log('Error initializing mock device: ' + err.message, 'error');
+            console.error(err);
         }
-
-        log('Mock device connected with ' + mockDevice.models.length + ' models', 'success');
         return;
     }
 
@@ -763,13 +780,13 @@ function setupMockDevice() {
     const toggle = document.getElementById('mock-toggle');
     if (!toggle) return;
 
-    toggle.onchange = () => {
+    toggle.onchange = async () => {
         mockMode = toggle.checked;
         const displayPanel = document.getElementById('display-panel');
 
         if (mockMode) {
             log('Mock mode enabled', 'info');
-            scanDevices(); // Auto-connect mock
+            await scanDevices(); // Auto-connect mock
         } else {
             log('Mock mode disabled', 'info');
             if (displayPanel) displayPanel.style.display = 'none';

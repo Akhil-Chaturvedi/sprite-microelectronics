@@ -80,16 +80,17 @@ private:
     }
   }
   
-  // Bubble sort sprites by layer (simple, good enough for 8 sprites)
+  // Insertion sort sprites by layer (More efficient for small arrays)
   void sortByLayer() {
-    for (uint8_t i = 0; i < sprite_count - 1; i++) {
-      for (uint8_t j = 0; j < sprite_count - i - 1; j++) {
-        if (sprites[j].layer > sprites[j + 1].layer) {
-          Sprite temp = sprites[j];
-          sprites[j] = sprites[j + 1];
-          sprites[j + 1] = temp;
+    for (uint8_t i = 1; i < sprite_count; i++) {
+        Sprite key = sprites[i];
+        int8_t j = i - 1;
+        
+        while (j >= 0 && sprites[j].layer > key.layer) {
+            sprites[j + 1] = sprites[j];
+            j = j - 1;
         }
-      }
+        sprites[j + 1] = key;
     }
   }
   

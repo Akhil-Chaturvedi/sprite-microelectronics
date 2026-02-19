@@ -1,20 +1,23 @@
 # Sprite One Host Libraries
 
-Host-side libraries for controlling Sprite One from PC or embedded systems.
+Host-side libraries for controlling Sprite One from a PC or embedded MCU.
 
 ## Directory Structure
 
 ```
 host/
-├── python/              # Python library
-│   ├── sprite_one.py    # Main library
-│   ├── examples.py      # Usage examples
-│   └── requirements.txt # Dependencies
-│
-└── c/                   # C library for embedded
-    ├── sprite_one.h     # Header file
-    └── sprite_one.c     # Implementation
+├── python/
+│   ├── sprite_one.py     # Main library
+│   ├── examples.py       # Usage examples
+│   ├── test_suite.py     # Integration tests
+│   ├── unit_tests.py     # Unit tests for protocol layer
+│   └── requirements.txt  # pyserial
+└── c/
+    ├── sprite_one.h      # Header
+    └── sprite_one.c      # Implementation
 ```
+
+---
 
 ## Python Library
 
@@ -22,119 +25,92 @@ host/
 
 ```bash
 cd host/python
-pip install -r requirements.txt
+pip install -r requirements.txt   # installs pyserial
 ```
 
-### Quick Start
+### API Summary
 
-```python
-from sprite_one import SpriteOne
+**System**
+- `get_version()` → `(major, minor, patch)`
 
-# Connect
-with SpriteOne('COM3') as sprite:  # or '/dev/ttyUSB0'
-    # Train AI
-    sprite.ai_train(epochs=100)
-    
-    # Run inference
-    result = sprite.ai_infer(1.0, 0.0)
-    print(f"1 XOR 0 = {result}")
-    
-    # Graphics
-    sprite.clear()
-    sprite.rect(10, 10, 50, 30)
-    sprite.flush()
-```
+**Graphics**
+- `clear(color=0)` — fill display
+- `pixel(x, y, color=1)` — single pixel
+- `rect(x, y, w, h, color=1)` — filled rectangle
+- `text(x, y, string, color=1)` — draw text
+- `flush()` — push framebuffer to OLED
 
-### API Reference
+**AI — Inference**
+- `ai_infer(in0, in1)` → `float` — run inference (legacy 2-in API)
+- `ai_status()` → `dict` — `{state, model_loaded, epochs, last_loss}`
 
-**System:**
-- `sprite.get_version()` - Get firmware version
+**Model Management** (dynamic models, V3 format)
+- `model_info()` → `dict` — active model metadata
+- `model_list()` → `list[str]` — models stored in flash
+- `model_select(filename)` — load a stored model
+- `model_upload(filename, data)` — upload `.aif32` to device flash
+- `model_delete(filename)` — delete from flash
 
-**Graphics:**
-- `sprite.clear(color=0)` - Clear display
-- `sprite.pixel(x, y, color=1)` - Draw pixel
-- `sprite.rect(x, y, w, h, color=1)` - Draw rectangle
-- `sprite.text(x, y, text, color=1)` - Draw text
-- `sprite.flush()` - Update display
+**On-Device Training**
+- `finetune_start(learning_rate=0.01)` — init Adam optimizer + MSE loss
+- `finetune_data(inputs, targets)` → `float` loss — one training step
+- `finetune_stop(save=True)` — end session, optionally persist weights
 
-**AI:**
-- `sprite.ai_infer(in0, in1)` - Run inference
-- `sprite.ai_train(epochs=100)` - Train model
-- `sprite.ai_status()` - Get AI status
-- `sprite.ai_save(filename)` - Save model
-- `sprite.ai_load(filename)` - Load model
-- `sprite.ai_list_models()` - List saved models
+**File operations (legacy)**
+- `ai_save(filename)` / `ai_load(filename)` — save/load hardcoded model slot
+- `ai_list_models()` / `ai_delete(filename)`
+
+See [docs/API.md](../docs/API.md) for full signatures and examples.
+
+---
 
 ## C Library
 
-### Platform Integration
-
-The C library uses function pointers for UART operations, making it platform-agnostic.
+Platform-agnostic — provide three I/O function pointers at init time.
 
 ```c
 #include "sprite_one.h"
 
-// Implement these for your platform
-void uart_write(uint8_t byte) { /* ... */ }
-uint8_t uart_read(void) { /* ... */ }
-bool uart_available(void) { /* ... */ }
+void    platform_write(uint8_t b) { /* write one byte */ }
+uint8_t platform_read(void)       { /* blocking read one byte */ }
+bool    platform_available(void)  { /* true if data ready */ }
 
-// Initialize
-sprite_context_t sprite;
-sprite_init(&sprite, uart_write, uart_read, uart_available, 2000);
+sprite_context_t ctx;
+sprite_init(&ctx, platform_write, platform_read, platform_available, 2000);
 
-// Use it
+// Graphics
+sprite_clear(&ctx, 0);
+sprite_rect(&ctx, 10, 10, 50, 30, 1);
+sprite_flush(&ctx);
+
+// Inference
 float result;
-sprite_ai_infer(&sprite, 1.0, 0.0, &result);
+sprite_ai_infer(&ctx, 1.0f, 0.0f, &result);
+
+// Model management
+sprite_model_upload(&ctx, "model.aif32", data_ptr, data_len);
+sprite_model_select(&ctx, "model.aif32");
 ```
 
-### Example (ESP32)
+### ESP32 Example
 
 ```c
-// ESP32 UART wrapper
-void esp32_write(uint8_t b) {
-    Serial2.write(b);
-}
-
-uint8_t esp32_read(void) {
-    return Serial2.read();
-}
-
-bool esp32_available(void) {
-    return Serial2.available() > 0;
-}
+void esp32_write(uint8_t b) { Serial2.write(b); }
+uint8_t esp32_read(void)    { return Serial2.read(); }
+bool esp32_available(void)  { return Serial2.available() > 0; }
 
 void setup() {
     Serial2.begin(115200, SERIAL_8N1, RX_PIN, TX_PIN);
-    
-    sprite_context_t sprite;
-    sprite_init(&sprite, esp32_write, esp32_read, 
-                esp32_available, 2000);
-    
-    // Train model
-    float loss;
-    sprite_ai_train(&sprite, 100, &loss);
-    
-    // Test
+    sprite_context_t ctx;
+    sprite_init(&ctx, esp32_write, esp32_read, esp32_available, 2000);
+
     float result;
-    sprite_ai_infer(&sprite, 1.0, 0.0, &result);
+    sprite_ai_infer(&ctx, 1.0f, 0.0f, &result);
 }
 ```
 
-## Protocol Format
-
-All commands use this packet structure:
-
-**Request:**
-```
-[0xAA] [CMD] [LEN] [PAYLOAD...] [CHECKSUM]
-```
-
-**Response:**
-```
-[0xAA] [CMD] [STATUS] [LEN] [DATA...] [CHECKSUM]
-```
+---
 
 ## License
 
-MIT License - See main project README
+MIT — see [LICENSE](../LICENSE)

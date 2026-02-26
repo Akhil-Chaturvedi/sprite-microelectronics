@@ -4,9 +4,9 @@
  * Implements the same interface as SpriteDevice but runs entirely in-browser.
  */
 
-// Prevent duplicate loading
-if (typeof window.MockSpriteDevice !== 'undefined') {
-  console.warn('[MockDevice] Script already loaded, skipping redefinition');
+// Guard against double-loading (browser cache / multiple script tags)
+if (typeof window !== 'undefined' && window.MockSpriteDevice) {
+  // Already defined — nothing to do
 } else {
 
   // Helper for CRC32
@@ -32,7 +32,7 @@ if (typeof window.MockSpriteDevice !== 'undefined') {
     constructor(name = 'Mock Sprite One') {
       this.displayName = name;
       this.isConnected = false;
-      this.version = 'v2.0.0';
+      this.version = 'v2.1.0';
       this.portInfo = { usbVendorId: 0x2E8A, usbProductId: 0x000A };
 
       // Simulated state
@@ -1381,9 +1381,8 @@ if (typeof window.MockSpriteDevice !== 'undefined') {
 
   function val_sq(x) { return x * x; }
 
-  // Export
-  console.log('[MockDevice] Exporting MockSpriteDevice to window object');
-  window.MockSpriteDevice = MockSpriteDevice;
-  console.log('[MockDevice] Export complete, MockSpriteDevice is:', typeof window.MockSpriteDevice);
+  // Export to global scope
+  if (typeof window !== 'undefined') window.MockSpriteDevice = MockSpriteDevice;
+  if (typeof global !== 'undefined') global.MockSpriteDevice = MockSpriteDevice;
 
-} // End of guard if-block
+} // end duplicate-load guard

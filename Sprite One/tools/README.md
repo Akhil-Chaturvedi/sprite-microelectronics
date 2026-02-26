@@ -1,12 +1,31 @@
 # Sprite One Tools
 
+## `mock_device.py`
+
+Python-based protocol simulator. Mirrors the firmware command table for testing the Python host library without hardware. Implements CRC32 validation, per-chunk ACK for model uploads, and handlers for all command groups including Industrial API Primitives (0xA0–0xA7).
+
+**Built-in test modes:**
+
+```bash
+# Protocol correctness + chunked upload
+py mock_device.py --loopback
+
+# Industrial API Primitives (0xA0-0xA7) with assertions
+py mock_device.py --test-api
+
+# Listen on a real serial port (e.g. via virtual COM pair)
+py mock_device.py COM10
+```
+
+---
+
 ## `gen_sentinel_model.py`
 
-Generates `.aif32` V3 model files from Python. Used to produce all reference models in the project.
+Generates `.aif32` V3 model files from Python. Produces all reference models used by the test suite and web trainer.
 
-**What it generates:**
+**Output files:**
 
-| Output file | Architecture | Purpose |
+| File | Architecture | Purpose |
 |---|---|---|
 | `sentinel_god_v3.aif32` | Conv2D → MaxPool → Flatten → Dense → Sigmoid | Main vision model |
 | `vision_demo.aif32` | Deeper CNN variant | Vision pipeline demo |
@@ -14,38 +33,21 @@ Generates `.aif32` V3 model files from Python. Used to produce all reference mod
 | `test_comprehensive.aif32` | Dense → ReLU → Dense → Sigmoid | Multi-layer test |
 | `xor_random.aif32` | Dense → Sigmoid (randomized weights) | Training convergence test |
 
-**Usage:**
+All output files are written to the project root.
 
 ```bash
-python gen_sentinel_model.py
-```
-
-All output files are written to the project root. Copy them to the `webapp/` folder or upload directly via the web trainer.
-
----
-
-## `mock_device.py`
-
-Python-based simulation of the Sprite One protocol. Mirrors the JavaScript mock device (`webapp/js/mock_device.js`) for testing the Python host library without hardware.
-
-Implements the same command table as the firmware (0x50–0x67), including CRC32 validation and per-chunk ACK on model upload.
-
-**Usage:**
-
-```bash
-# Run the test script against the mock
-python mock_device.py
+py gen_sentinel_model.py
 ```
 
 ---
 
 ## `converter/`
 
-Converts TensorFlow Lite (`.tflite`) and Keras (`.h5`) models to `.aif32` V3 format.
+Converts TensorFlow Lite (`.tflite`) and Keras (`.h5`) models to `.aif32` V3 format. No TensorFlow installation required for `.tflite` input (uses a built-in FlatBuffer parser).
 
 ```bash
-python converter/convert.py model.tflite -o output.aif32
-python converter/convert.py model.h5 -o output.aif32
+py converter/convert.py model.tflite -o output.aif32
+py converter/convert.py model.h5 -o output.aif32
 ```
 
-See `converter/README.md` for details.
+See `converter/README.md` for supported layer types and known limitations.

@@ -1,8 +1,7 @@
 /**
- * Sprite One - Enhanced Configuration & Utilities
- * Week 4 Day 27: Polish
- * 
- * Centralized configuration and helper utilities for better UX.
+ * Sprite One - Configuration & Utilities
+ *
+ * Centralized configuration, logging macros, and helper utilities.
  */
 
 #ifndef SPRITE_CONFIG_H
@@ -11,8 +10,8 @@
 #include <Arduino.h>
 
 // ============ VERSION ============
-#define SPRITE_VERSION_MAJOR    1
-#define SPRITE_VERSION_MINOR    0
+#define SPRITE_VERSION_MAJOR    2
+#define SPRITE_VERSION_MINOR    1
 #define SPRITE_VERSION_PATCH    0
 #define SPRITE_BUILD_DATE       __DATE__
 #define SPRITE_BUILD_TIME       __TIME__

@@ -31,6 +31,7 @@ Usage:
 import serial
 import struct
 import time
+import binascii
 from typing import Optional, List, Tuple
 
 # Protocol constants
@@ -63,6 +64,16 @@ CMD_MODEL_DELETE = 0x64
 CMD_FINETUNE_START = 0x65
 CMD_FINETUNE_DATA = 0x66
 CMD_FINETUNE_STOP = 0x67
+
+# Industrial API Primitives
+CMD_WHO_IS_THERE = 0xA0
+CMD_PING_ID = 0xA1
+CMD_BUFFER_WRITE = 0xA2
+CMD_BUFFER_SNAPSHOT = 0xA3
+CMD_BASELINE_CAPTURE = 0xA4
+CMD_BASELINE_RESET = 0xA5
+CMD_GET_DELTA = 0xA6
+CMD_CORRELATE = 0xA7
 
 # Response codes
 RESP_OK = 0x00
@@ -163,8 +174,18 @@ class SpriteOne:
             if len(resp_data) < resp_len:
                 raise SpriteOneError("Incomplete response data")
         
-        # Read checksum (ignored for now)
-        self.ser.read(1)
+        # Read CRC32 trailer (4 bytes, little-endian)
+        crc_trailer = self.ser.read(4)
+        if len(crc_trailer) < 4:
+            raise SpriteOneError("Missing CRC32 trailer in response")
+        
+        expected_crc = struct.unpack('<I', crc_trailer)[0]
+        
+        # Calculate CRC over [CMD, STATUS, LEN, DATA]
+        actual_crc = binascii.crc32(header[1:4] + resp_data) & 0xFFFFFFFF
+        
+        if actual_crc != expected_crc:
+            raise SpriteOneError(f"CRC mismatch! Expected 0x{expected_crc:08X}, got 0x{actual_crc:08X}")
         
         return resp_status, resp_data
     
@@ -307,16 +328,25 @@ class SpriteOne:
             return {}
         
         state = data[0]
-        loaded = bool(data[1])
+        # 0=None, 1=Static, 2=Dynamic
+        loaded_type = data[1]
         epochs = struct.unpack('<H', data[2:4])[0]
-        loss = struct.unpack('<f', data[4:8])[0] if len(data) >= 8 else 0.0
+        loss = struct.unpack('<f', data[4:8])[0]
         
-        return {
+        result = {
             'state': state,
-            'model_loaded': loaded,
+            'model_loaded': bool(loaded_type > 0),
+            'model_type': 'Dynamic' if loaded_type == 2 else ('Static' if loaded_type == 1 else 'None'),
             'epochs': epochs,
             'last_loss': loss
         }
+        
+        if len(data) >= 12:
+            in_c, out_c = struct.unpack('<HH', data[8:12])
+            result['input_dim'] = in_c
+            result['output_dim'] = out_c
+            
+        return result
     
     def ai_save(self, filename: str = "/model.aif32"):
         """Save current model to flash."""
@@ -536,10 +566,8 @@ class SpriteOne:
         Returns:
             Current loss value
         """
-        # Pack inputs and outputs as floats
-        payload = struct.pack('<B', len(inputs))
-        payload += struct.pack(f'<{len(inputs)}f', *inputs)
-        payload += struct.pack('<B', len(outputs))
+        # Pack inputs and outputs as raw floats (no length prefixes)
+        payload = struct.pack(f'<{len(inputs)}f', *inputs)
         payload += struct.pack(f'<{len(outputs)}f', *outputs)
         
         status, data = self._send_command(CMD_FINETUNE_DATA, payload)
@@ -577,6 +605,66 @@ class SpriteOne:
             result['samples_trained'] = samples
         
         return result
+
+    # ===== Industrial API Primitives (v2.2+) =====
+    
+    def get_device_id(self) -> bytes:
+        """Get unique 8-byte device ID."""
+        status, data = self._send_command(CMD_WHO_IS_THERE)
+        if status != RESP_OK or len(data) < 8:
+            raise SpriteOneError(f"WhoIsThere failed: status={status}")
+        return data[:8]
+    
+    def ping_id(self, device_id: bytes) -> bool:
+        """Verify device ID."""
+        status, _ = self._send_command(CMD_PING_ID, device_id)
+        return status == RESP_OK
+    
+    def buffer_write(self, value: float):
+        """Push float value into circular buffer."""
+        payload = struct.pack('<f', value)
+        status, _ = self._send_command(CMD_BUFFER_WRITE, payload)
+        if status != RESP_OK:
+            raise SpriteOneError(f"Buffer write failed: status={status}")
+            
+    def buffer_snapshot(self) -> List[float]:
+        """Get all samples from circular buffer."""
+        status, data = self._send_command(CMD_BUFFER_SNAPSHOT)
+        if status != RESP_OK:
+            raise SpriteOneError(f"Buffer snapshot failed: status={status}")
+        
+        count = len(data) // 4
+        if count == 0: return []
+        return list(struct.unpack(f'<{count}f', data[:count*4]))
+
+    def baseline_capture(self) -> float:
+        """Capture current buffer mean as baseline."""
+        status, data = self._send_command(CMD_BASELINE_CAPTURE)
+        if status != RESP_OK or len(data) < 4:
+            raise SpriteOneError(f"Baseline capture failed: status={status}")
+        return struct.unpack('<f', data[:4])[0]
+        
+    def baseline_reset(self):
+        """Clear baseline."""
+        status, _ = self._send_command(CMD_BASELINE_RESET)
+        if status != RESP_OK:
+            raise SpriteOneError(f"Baseline reset failed: status={status}")
+            
+    def get_delta(self) -> float:
+        """Get |live_mean - baseline|."""
+        status, data = self._send_command(CMD_GET_DELTA)
+        if status != RESP_OK or len(data) < 4:
+            raise SpriteOneError(f"Get delta failed: status={status}")
+        return struct.unpack('<f', data[:4])[0]
+        
+    def correlate(self, ref_data: List[float]) -> float:
+        """Get normalized cross-correlation score."""
+        count = len(ref_data)
+        payload = struct.pack(f'<{count}f', *ref_data)
+        status, data = self._send_command(CMD_CORRELATE, payload)
+        if status != RESP_OK or len(data) < 4:
+            raise SpriteOneError(f"Correlate failed: status={status}")
+        return struct.unpack('<f', data[:4])[0]
 
 
 # Example usage

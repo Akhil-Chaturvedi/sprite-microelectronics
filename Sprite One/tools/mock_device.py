@@ -121,7 +121,7 @@ class MockDevice:
             CMD_UPLOAD_END: self._cmd_upload_end,
             CMD_MODEL_DELETE: self._cmd_ai_delete,
             CMD_FINETUNE_START: self._cmd_ack,
-            CMD_FINETUNE_DATA: self._cmd_ack,
+            CMD_FINETUNE_DATA: self._cmd_finetune_data,
             CMD_FINETUNE_STOP: self._cmd_ack,
             CMD_BATCH: self._cmd_batch,
             # Sentinel Handlers
@@ -241,11 +241,13 @@ class MockDevice:
         return self._make_response(RESP_OK, struct.pack('<f', self.last_loss))
 
     def _cmd_ai_status(self, payload):
-        data = struct.pack('<BBHf',
+        data = struct.pack('<BBHfHH',
                            0,  # state
-                           1 if self.model_loaded else 0,
+                           2 if self.model_loaded else 0, # Assuming Dynamic for test
                            self.epochs_trained,
-                           self.last_loss)
+                           self.last_loss,
+                           2, # input_dim
+                           1) # output_dim
         return self._make_response(RESP_OK, data)
 
     def _cmd_ai_save(self, payload):
@@ -400,6 +402,15 @@ class MockDevice:
         score = _normalized_cross_corr(self.circular_buffer, ref)
         return self._make_response(RESP_OK, struct.pack('<f', score))
 
+    def _cmd_finetune_data(self, payload):
+        """Simulate fine-tuning training step."""
+        # For our 2->1 XOR model, payload should be 3 floats (12 bytes)
+        if len(payload) >= 12:
+            self.last_loss = max(0.001, self.last_loss * 0.98)
+            self.epochs_trained += 1
+            return self._make_response(RESP_OK, struct.pack('<f', self.last_loss))
+        return self._make_response(RESP_ERROR)
+    
     def _cmd_ack(self, payload):
         return self._make_response(RESP_OK)
 

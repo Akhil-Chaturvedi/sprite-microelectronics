@@ -8,7 +8,7 @@ firmware/.pio/
 *.map
 *.uf2
 
-# Arduino/PlatformIO
+# Arduino / PlatformIO
 .vscode/
 .pio/
 .pioenvs/
@@ -26,6 +26,20 @@ dist/
 *.egg
 venv/
 env/
+.env
+
+# Model files (generated — do not commit large binaries)
+sentinel_god.aif32
+sentinel_god_v3.aif32
+vision_demo.aif32
+test_comprehensive.aif32
+test_conv.aif32
+test_pool.aif32
+test_sigmoid.aif32
+xor_random.aif32
+
+# Web app dependencies
+webapp/node_modules/
 
 # IDEs
 .idea/
@@ -44,6 +58,6 @@ Desktop.ini
 *.bak
 *.old
 
-# Empty directories (keep structure)
+# Empty placeholder directories (keep the structure, not the files)
 firmware/examples/
 firmware/src/

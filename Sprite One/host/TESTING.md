@@ -1,226 +1,125 @@
 # Sprite One Testing Guide
 
-Week 4 Day 24 - Automated Testing Suite
-
 ## Test Organization
 
 ```
 host/python/
-├── test_suite.py      # Main automated tests (requires hardware)
-├── unit_tests.py      # Unit tests (no hardware needed)
-└── sprite_one.py      # Library to test
+├── verify_hardware.py   # Hardware verification script (requires device or mock)
+├── test_suite.py        # Integration tests (requires hardware)
+├── unit_tests.py        # Unit tests (no hardware needed)
+└── sprite_one.py        # Library under test
+
+tools/
+├── mock_device.py       # Python protocol simulator (no hardware needed)
 ```
+
+---
 
 ## Running Tests
 
-### Automated Test Suite (with hardware)
-
-Comprehensive integration tests requiring connected Sprite One:
-
-```bash
-# Run all tests
-python test_suite.py --port COM3
-
-# Verbose output
-python test_suite.py --port COM3 --verbose
-
-# Stress test with more iterations
-python test_suite.py --port COM3 --stress 50
-```
-
-**Test Categories:**
-1. Connection (version check)
-2. Graphics (clear, pixel, rect, text, flush)
-3. AI Training (train model, check status)
-4. AI Inference (XOR test cases)
-5. AI Persistence (save, load, list, delete)
-6. Integration (combined workflows)
-7. Error Handling (invalid operations)
-8. Stress Test (repeated operations)
-
 ### Unit Tests (no hardware)
 
-Tests that don't require hardware:
+Tests the protocol layer — packet construction, CRC calculation, response parsing, error handling.
 
 ```bash
-python unit_tests.py
+cd host/python
+py unit_tests.py
 ```
 
-**Tests:**
-- Protocol packet structure
-- Checksum calculation
-- Data type conversions
-- Error handling
-- Response parsing
+### Mock Device Tests (no hardware)
+
+Built-in loopback and API tests in the mock device, covering protocol framing and Industrial API Primitives.
+
+```bash
+py tools/mock_device.py --loopback     # CRC validation + chunked upload
+py tools/mock_device.py --test-api     # Industrial primitives (0xA0-0xA7)
+```
+
+All assertions print pass/fail and exit with code 0 on success.
+
+### Integration Tests (requires hardware)
+
+Full test suite against a connected Sprite One device.
+
+```bash
+py host/python/test_suite.py --port COM3
+py host/python/test_suite.py --port COM3 --verbose
+py host/python/test_suite.py --port COM3 --stress 50
+```
+
+**Test categories:**
+1. Connection (version check)
+2. Graphics (clear, pixel, rect, text, flush)
+3. AI Training (train, check status, loss value)
+4. AI Inference (XOR test cases)
+5. AI Persistence (save, load, list, delete)
+6. Model Management (upload, select, delete)
+7. Fine-tuning (start, data, stop)
+8. Industrial Primitives (ID, buffer, baseline, delta, correlate)
+9. Error Handling (invalid operations, bad CRC)
+
+### Hardware Verification Script
+
+End-to-end verification covering all implemented features.
+
+```bash
+py host/python/verify_hardware.py COM3
+```
+
+---
 
 ## Test Results Format
 
-### Success
 ```
-==================================================
-Sprite One - Automated Test Suite
-==================================================
+[1] Connection
+  OK Version (2.2.0)
 
-Connecting to COM3...
-Connected!
-
-[1] Connection Tests
-  ✓ Get version (v1.0.0)
-
-[2] Graphics Tests
-  ✓ Clear display
-  ✓ Draw pixel
-  ✓ Draw rectangle
-  ✓ Draw text
-  ✓ Flush display
+[2] Industrial API
+  OK Device ID: xx:xx:xx:xx:xx:xx:xx:xx
+  OK Ping ID match
+  OK Buffer write x10
+  OK Snapshot match
+  OK Baseline capture
+  OK Delta non-zero
+  OK Baseline reset
+  OK Correlation score
 
 ...
 
-==================================================
-Test Results: 28/28 passed (0 failed)
-==================================================
+RESULT: SUCCESS
 ```
 
-### Failure
-```
-[4] AI Inference Tests
-  ✓ 0 XOR 0 = 0 (result: 0.021)
-  ✗ 0 XOR 1 = 1: Expected 1, got 0
-  ...
+---
 
-==================================================
-Test Results: 26/28 passed (2 failed)
+## CI Integration
 
-Failed Tests:
-  - 0 XOR 1 = 1: Expected 1, got 0
-  - Full workflow: Connection timeout
-==================================================
-```
-
-## CI/CD Integration
-
-### GitHub Actions Example
+The unit tests and mock device tests do not require hardware and are suitable for CI:
 
 ```yaml
-name: Test Sprite One
+name: Test
 on: [push, pull_request]
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - name: Set up Python
-        uses: actions/setup-python@v2
+      - uses: actions/checkout@v3
+      - uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Run unit tests
-        run: python unit_tests.py
+          python-version: '3.10'
+      - run: pip install -r host/python/requirements.txt
+      - run: py host/python/unit_tests.py
+      - run: py tools/mock_device.py --loopback
+      - run: py tools/mock_device.py --test-api
 ```
 
-## Test Coverage
-
-| Component | Coverage | Tests |
-|-----------|----------|-------|
-| Protocol | 95% | Unit + Integration |
-| Graphics | 100% | Integration |
-| AI Training | 100% | Integration |
-| AI Inference | 100% | Integration |
-| Persistence | 100% | Integration |
-| Error Handling | 90% | Unit + Integration |
-
-## Adding New Tests
-
-### Integration Test
-
-Add to `test_suite.py`:
-
-```python
-def test_my_feature(sprite, results):
-    """Test my new feature."""
-    print("\n[9] My Feature Tests")
-    
-    try:
-        result = sprite.my_new_function()
-        if result == expected:
-            results.pass_test("My test")
-        else:
-            results.fail_test("My test", "Wrong result")
-    except Exception as e:
-        results.fail_test("My test", str(e))
-
-# Add to main():
-test_my_feature(sprite, results)
-```
-
-### Unit Test
-
-Add to `unit_tests.py`:
-
-```python
-class TestMyFeature(unittest.TestCase):
-    def test_something(self):
-        """Test something."""
-        result = my_function(input)
-        self.assertEqual(result, expected)
-```
+---
 
 ## Troubleshooting
 
-### "Connection failed"
-- Check port name (COM3, /dev/ttyUSB0)
-- Verify Sprite One is powered
-- Close other serial monitors
-- Check baudrate (115200)
-
-### "Model not loaded"
-- Run training test first
-- Save model before load test
-- Check flash filesystem
-
-### Timeout Errors
-- Increase Serial timeout in sprite_one.py
-- Check for slow training (reduce epochs)
-- Verify hardware performance
-
-## Best Practices
-
-1. **Run unit tests first** - Fast, no hardware needed
-2. **Run full suite before commits** - Catch regressions
-3. **Use verbose mode for debugging** - See detailed output
-4. **Stress test for stability** - Find edge cases
-5. **Test on clean state** - Format flash if needed
-
-## Performance Benchmarks
-
-Typical test run times:
-
-| Test Category | Duration |
-|---------------|----------|
-| Connection | 0.1s |
-| Graphics | 0.5s |
-| AI Training | 3-5s |
-| AI Inference | 0.4s |
-| Persistence | 1s |
-| Integration | 2s |
-| Error Handling | 0.5s |
-| Stress (10x) | 5s |
-| **Total** | **~15s** |
-
-## Exit Codes
-
-- `0` - All tests passed
-- `1` - One or more tests failed
-- `2` - Connection error
-
-Use in scripts:
-```bash
-python test_suite.py --port COM3
-if [ $? -eq 0 ]; then
-    echo "Tests passed!"
-else
-    echo "Tests failed!"
-fi
-```
+| Problem | Check |
+|---|---|
+| Connection failed | Port name correct? Firmware uploaded? Other serial monitors closed? |
+| Model not loaded | Run `model_select()` before inference or training tests |
+| Timeout on training | Reduce epoch count; AI training blocks the command loop |
+| CRC errors | Corrupted cable or USB hub; connect Pico directly |

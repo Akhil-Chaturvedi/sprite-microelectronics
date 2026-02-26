@@ -4,17 +4,19 @@ RP2040-based coprocessor for graphics rendering and neural network inference/tra
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-RP2040-orange.svg)](https://www.raspberrypi.com/products/rp2040/)
-[![Version](https://img.shields.io/badge/version-2.1-green.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.2-green.svg)](CHANGELOG.md)
 
 ## What It Does
 
 A host MCU (or PC) sends binary commands over UART or USB-CDC. Sprite One handles:
 
-- 128×64 OLED display (SSD1306) with a software framebuffer and 8 hardware sprite slots
-- Neural network inference — load any `.aif32` model, run forward passes
+- 128x64 OLED display (SSD1306) with a software framebuffer and 8 hardware sprite slots
+- Neural network inference — load any `.aif32` V3 model, run forward passes
 - On-device training — backpropagation via AIfES (Adam + MSE), one step per command
+- Incremental fine-tuning via `FINETUNE_START` / `FINETUNE_DATA` / `FINETUNE_STOP`
 - LittleFS flash storage for model files
-- Dual transport: UART (115200) and USB-CDC (~12 Mbps)
+- Dual transport: UART (115200 baud) and USB-CDC
+- Industrial signal processing primitives: device identity, rolling buffer, baseline delta, cross-correlation
 
 ## Hardware
 
@@ -57,65 +59,87 @@ pip install pyserial
 from sprite_one import SpriteOne
 
 with SpriteOne('COM3') as sprite:
-    print(sprite.get_version())          # (2, 1, 0)
+    print(sprite.get_version())          # (2, 2, 0)
 
     # Upload a model and run inference
     with open("sentinel_god_v3.aif32", "rb") as f:
         sprite.model_upload("sentinel_god_v3.aif32", f.read())
     sprite.model_select("sentinel_god_v3.aif32")
-    result = sprite.ai_infer(1.0, 0.0)  # Returns output float(s)
+    result = sprite.ai_infer(1.0, 0.0)
 
-    # On-device finetune (one training step)
+    # Incremental fine-tune (one training step per call)
     sprite.finetune_start(learning_rate=0.01)
     loss = sprite.finetune_data(inputs=[0.0, 1.0], targets=[1.0])
-    sprite.finetune_stop(save=True)
+    sprite.finetune_stop()
 ```
 
 ## Web Trainer
 
 Open `webapp/index.html` in Chrome or Edge.
 
-- **Mock mode** — toggle "Mock" in the header to simulate a device in-browser (no hardware needed)
-- **Refresh** to scan for a real USB device
+- Toggle "Mock" in the header to simulate a device in-browser (no hardware needed)
+- Click "Refresh" to scan for a real USB device
 - Upload `.aif32` models, run inference, collect training samples, deploy
 
-Requires WebSerial, only supported in Chrome and Edge.
+Requires WebSerial API — Chrome and Edge only. Firefox and Safari are not supported.
 
 ## Model Conversion
 
 Convert a TFLite or Keras model to `.aif32`:
 
 ```bash
-python tools/converter/convert.py model.tflite output.aif32
-python tools/converter/convert.py model.h5 output.aif32
+python tools/converter/convert.py model.tflite -o output.aif32
+python tools/converter/convert.py model.h5 -o output.aif32
 ```
 
-Generate models from scratch (custom topologies):
+Generate reference models from scratch:
 
 ```bash
 python tools/gen_sentinel_model.py
 ```
 
-This produces the reference models: `sentinel_god_v3.aif32`, `vision_demo.aif32`, and test variants.
+This writes `sentinel_god_v3.aif32`, `vision_demo.aif32`, and several test variants to the project root.
+
+## Hardware Verification
+
+Run the verification script against a connected device:
+
+```bash
+py host/python/verify_hardware.py COM3
+```
+
+For mock-mode testing (no hardware):
+
+```bash
+py tools/mock_device.py --loopback        # Protocol + upload
+py tools/mock_device.py --test-api        # Industrial primitives
+```
 
 ## Project Structure
 
 ```
 sprite-one/
 ├── examples/sprite_one_unified/   # Main firmware (.ino + headers)
+│   ├── sprite_one_unified.ino
+│   ├── sprite_dynamic.h           # V3 dynamic model loader + trainer
+│   ├── sprite_model.h             # Model management (upload, select)
+│   ├── sprite_inference.h         # Legacy INT8 inference path
+│   ├── sprite_transport.h         # UART/USB-CDC abstraction
+│   ├── sprite_display.h           # SSD1306 driver
+│   └── sprite_engine.h            # Sprite system
 ├── firmware/                      # PlatformIO config, shared headers
 ├── host/
-│   ├── python/                    # Python library (sprite_one.py)
+│   ├── python/                    # Python library and test scripts
 │   └── c/                         # C library for embedded hosts
-├── webapp/                        # Web training UI
+├── webapp/                        # Browser-based training UI
 │   ├── index.html
 │   ├── style.css
-│   └── js/                        # app.js, mock_device.js, device.js, ...
+│   └── js/
 ├── tools/
-│   ├── converter/                 # TFLite / Keras → .aif32
+│   ├── converter/                 # TFLite / Keras to .aif32
+│   ├── mock_device.py             # Python protocol simulator
 │   └── gen_sentinel_model.py      # Reference model generator
-├── docs/                          # Protocol spec, API reference
-└── test_runner.js                 # Node.js simulator test suite
+└── docs/                          # Protocol spec, API reference
 ```
 
 ## Specifications
@@ -123,21 +147,20 @@ sprite-one/
 | | Value |
 |---|---|
 | MCU | RP2040 (133 MHz, 264 KB RAM) |
-| Flash usage | ~115 KB (debug build) |
-| RAM usage | ~13 KB |
-| Transport | UART 115200 or USB-CDC |
-| Display | SSD1306 128×64, 1-bit |
+| Transport | UART 115200 baud or USB-CDC |
+| Display | SSD1306 128x64, 1-bit |
 | Hardware sprites | 8 slots |
 | Model format | `.aif32` V3 (dynamic layer table) |
-| AI inference | < 1 ms (small dense networks) |
-| On-device training | Adam + MSE, arbitrary topologies |
+| On-device training | Adam + MSE, Dense/ReLU/Sigmoid layers |
+| Industrial buffer | 60 float32 samples, circular |
 
 ## Known Limitations
 
-- **Display:** Software renderer only — no DMA or hardware acceleration
-- **AI training:** Supported layer types for backprop are Dense, ReLU, Sigmoid. Conv2D training is not yet supported on-device (inference only).
+- **Display:** Software renderer only — no DMA or hardware acceleration.
+- **AI training:** Backprop supports Dense, ReLU, and Sigmoid layers. Conv2D is inference-only.
 - **Protocol:** No flow control. For chunked uploads the host must wait for a per-chunk ACK before sending the next chunk.
-- **WebSerial:** Chrome/Edge only. Firefox and Safari are not supported.
+- **WebSerial:** Chrome and Edge only.
+- **Fine-tuning session state:** The optimizer is stateless between `FINETUNE_STOP` and the next `FINETUNE_START`. Accumulated momentum is lost if the session is interrupted.
 
 ## Documentation
 

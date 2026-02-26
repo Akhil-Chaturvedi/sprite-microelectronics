@@ -1,6 +1,6 @@
 # API Reference
 
-**Firmware version:** 2.1.0  
+**Firmware version:** 2.2.0
 **Python library:** `host/python/sprite_one.py`
 
 ---
@@ -41,7 +41,7 @@ sprite = SpriteOne('/dev/ttyUSB0', mode='uart', baudrate=115200)
 Returns firmware version as `(major, minor, patch)`.
 
 ```python
-major, minor, patch = sprite.get_version()  # e.g. (2, 1, 0)
+major, minor, patch = sprite.get_version()  # e.g. (2, 2, 0)
 ```
 
 ---
@@ -64,53 +64,58 @@ sprite.flush()                      # Push buffer to display
 
 #### `ai_infer(input0, input1) → float`
 
-Run inference on the active model. This signature assumes a 2-input model (e.g. XOR). For arbitrary input sizes, use the model management + finetune workflow instead.
+Run inference using the legacy 2-float-input signature. If a V3 dynamic model is loaded, the two inputs are placed at positions 0 and 1 of the model's input vector (remaining inputs zero-padded). For models with other input shapes, send raw data via `finetune_data()`.
 
 ```python
-result = sprite.ai_infer(1.0, 0.0)  # Returns ~0.98 for trained XOR
+result = sprite.ai_infer(1.0, 0.0)
 ```
 
 #### `ai_status() → dict`
 
 ```python
 s = sprite.ai_status()
-# {'state': 0, 'model_loaded': True, 'epochs': 100, 'last_loss': 0.012}
+# {
+#   'state': 0,
+#   'model_loaded': True,
+#   'model_type': 'Dynamic',   # 'None', 'Static', or 'Dynamic'
+#   'epochs': 100,
+#   'last_loss': 0.012,
+#   'input_dim': 2,
+#   'output_dim': 1
+# }
 ```
 
 ---
 
-### AI — File-based Model Storage (legacy)
+### AI — Legacy File Operations
 
-These commands use the old hardcoded model slot. For dynamic model loading, see **Model Management** below.
+These operate on the hardcoded static model slot. For V3 dynamic models, use the Model Management commands below.
 
 ```python
-sprite.ai_save("/xor.aif32")      # Save active model to flash
-sprite.ai_load("/xor.aif32")      # Load model from flash into fixed slot
-sprite.ai_list_models()           # Returns list of filenames on flash
-sprite.ai_delete("/old.aif32")    # Delete file from flash
+sprite.ai_save("/xor.aif32")     # Save active static model weights to flash
+sprite.ai_load("/xor.aif32")     # Load weights from flash into static slot
+sprite.ai_list_models()          # Returns list of filenames on flash
+sprite.ai_delete("/old.aif32")   # Delete file from flash
 ```
 
 ---
 
 ### Model Management
 
-Dynamic model loading — upload arbitrary `.aif32` V3 models without recompiling firmware. Multiple models can be stored in flash simultaneously.
+Upload arbitrary `.aif32` V3 models without recompiling firmware. Multiple models can coexist in flash.
 
-#### `model_info() → dict`
+#### `model_info() → dict | None`
 
-Returns metadata for the currently active model.
+Returns metadata for the currently active model, or `None` if no model is loaded.
 
 ```python
 info = sprite.model_info()
 # {
 #   'name': 'sentinel_god_v3',
-#   'input_count': 128,
-#   'output_count': 5,
-#   'layer_count': 5
+#   'input_size': 128,
+#   'output_size': 5
 # }
 ```
-
-Returns `None` if no model is active.
 
 #### `model_list() → list[str]`
 
@@ -123,7 +128,7 @@ models = sprite.model_list()
 
 #### `model_select(filename: str) → bool`
 
-Load a stored model and make it the active inference target.
+Load a stored model from flash and make it the active inference and training target.
 
 ```python
 sprite.model_select("sentinel_god_v3.aif32")
@@ -144,13 +149,15 @@ Delete a model file from flash.
 
 ---
 
-### On-Device Training (Finetune)
+### On-Device Training
 
-Train or fine-tune the active model directly on the device using AIfES (Adam optimizer, MSE loss). The model must already be loaded via `model_select()` or `model_upload()`.
+Train or fine-tune the active model directly on the device using AIfES (Adam optimizer, MSE loss). The model must be loaded via `model_select()` or uploaded with `model_upload()`.
 
-#### `finetune_start(learning_rate: float = 0.01) → bool`
+Supported layer types for backprop: Dense, ReLU, Sigmoid. Conv2D layers are inference-only.
 
-Allocate gradient/momentum memory and initialise the optimizer. Must be called before `finetune_data()`.
+#### `finetune_start(learning_rate: float = 0.01)`
+
+Allocate gradient and momentum memory and initialize the Adam optimizer. Must be called before `finetune_data()`.
 
 ```python
 sprite.finetune_start(learning_rate=0.01)
@@ -160,6 +167,9 @@ sprite.finetune_start(learning_rate=0.01)
 
 Run a single training step. Returns the loss for that step.
 
+- `inputs`: list of floats, length must match the model's `input_count`
+- `targets`: list of floats, length must match the model's `output_count`
+
 ```python
 for epoch in range(500):
     loss = sprite.finetune_data([0.0, 1.0], [1.0])
@@ -168,13 +178,51 @@ for epoch in range(500):
     loss = sprite.finetune_data([1.0, 1.0], [0.0])
 ```
 
-#### `finetune_stop(save: bool = True) → dict`
+#### `finetune_stop()`
 
-End the training session. If `save=True`, writes updated weights back to flash.
+End the training session.
 
 ```python
-sprite.finetune_stop(save=True)
+sprite.finetune_stop()
 ```
+
+---
+
+### Industrial API Primitives
+
+Low-level signal processing primitives implemented on-device. The device stores up to 60 `float32` samples in a circular buffer. Baseline and delta operations work against that buffer.
+
+#### `get_device_id() → bytes`
+
+Returns the 8-byte board-unique ID from the RP2040 one-time-programmable memory.
+
+#### `ping_id(device_id: bytes) → bool`
+
+Returns `True` if the provided 8-byte ID matches the device.
+
+#### `buffer_write(value: float)`
+
+Push one sample into the circular buffer. Oldest entry is evicted once the buffer exceeds 60 samples.
+
+#### `buffer_snapshot() → list[float]`
+
+Return all buffered samples as a list, ordered oldest-to-newest.
+
+#### `baseline_capture() → float`
+
+Freeze the current buffer mean as the baseline. Returns the captured mean.
+
+#### `baseline_reset()`
+
+Clear the baseline.
+
+#### `get_delta() → float`
+
+Returns `abs(live_mean - baseline)`. Raises `SpriteOneError` if no baseline has been captured.
+
+#### `correlate(ref_data: list[float]) → float`
+
+Normalized cross-correlation of the buffer contents against `ref_data`. Returns a score in [0.0, 1.0]. Score is 1.0 for identical signals, 0.0 for anti-correlated signals.
 
 ---
 
@@ -201,7 +249,7 @@ sprite_get_version(&ctx, &major, &minor, &patch);
 // Graphics
 sprite_clear(&ctx, 0);
 sprite_rect(&ctx, 10, 10, 50, 30, 1);
-sprite_text(&ctx, 0, 0, 1, "hello");   // x, y, color, string
+sprite_text(&ctx, 0, 0, 1, "hello");
 sprite_flush(&ctx);
 
 // Inference
@@ -234,14 +282,15 @@ except SpriteOneError as e:
 
 ## Performance
 
-Measured on RP2040 at 133 MHz with a 2-4-1 dense+sigmoid XOR model.
+Measured on RP2040 at 133 MHz.
 
-| Operation | Time |
-|---|---|
-| `ai_infer()` | < 1 ms |
-| `finetune_data()` (one step) | ~1–3 ms |
-| `model_upload()` (1 KB) | ~100–200 ms (USB-CDC) |
-| `model_select()` (load from flash) | ~10–50 ms (model-size dependent) |
+| Operation | Model | Time |
+|---|---|---|
+| `ai_infer()` | 2-4-1 dense+sigmoid | < 1 ms |
+| `finetune_data()` (one step) | 2-4-1 dense+sigmoid | ~1–3 ms |
+| `model_upload()` | 1 KB | ~100–200 ms (USB-CDC) |
+| `model_select()` | load from flash | ~10–50 ms (model-size dependent) |
+| `get_device_id()` | — | < 1 ms |
 
 ---
 
@@ -251,7 +300,8 @@ Measured on RP2040 at 133 MHz with a 2-4-1 dense+sigmoid XOR model.
 |---|---|
 | Display | 128×64, 1-bit |
 | Max packet payload | 255 bytes |
-| Max model filename | 15 chars |
+| Max model filename | 31 chars |
 | Flash storage | ~1.9 MB (LittleFS) |
 | Hardware sprites | 8 slots |
-| Concurrent models in RAM | 1 (loaded model) |
+| Concurrent models in RAM | 1 |
+| Industrial buffer depth | 60 float32 samples |

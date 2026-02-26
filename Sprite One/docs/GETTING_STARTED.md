@@ -5,18 +5,18 @@
 **Hardware:**
 - Raspberry Pi Pico (RP2040)
 - USB cable
-- *(Optional)* SSD1306 OLED display (128×64, I2C)
+- (Optional) SSD1306 OLED display (128x64, I2C)
 
 **Software:**
 - Python 3.7+
-- Arduino IDE 2.0+ or PlatformIO
-- Chrome or Edge (for the web trainer — needs WebSerial API)
+- Arduino IDE 2.0+ or Arduino CLI
+- Chrome or Edge (for the web trainer — requires WebSerial API)
 
 ---
 
 ## Hardware Connections
 
-### USB-CDC (default, faster)
+### USB-CDC (default)
 
 Connect the Pico directly via USB. No extra wiring needed.
 
@@ -31,6 +31,8 @@ Pico GP0 (TX)  →  Host RX
 Pico GP1 (RX)  ←  Host TX
 Pico GND       ─  Host GND
 ```
+
+115200 baud, 8N1.
 
 ### OLED Display (optional)
 
@@ -60,7 +62,7 @@ arduino-cli upload -p COM3 --fqbn rp2040:rp2040:rpipico .
 2. Install **Raspberry Pi Pico/RP2040** from Board Manager
 3. Install libraries: **AIfES for Arduino**, **LittleFS**
 4. Open `examples/sprite_one_unified/sprite_one_unified.ino`
-5. Select board: `Raspberry Pi Pico`, port: `COM3` (or your port)
+5. Select board: `Raspberry Pi Pico`, port: your COM port
 6. Upload
 
 ---
@@ -78,7 +80,7 @@ pip install pyserial
 from sprite_one import SpriteOne
 
 with SpriteOne('COM3') as sprite:
-    print(sprite.get_version())   # (2, 1, 0)
+    print(sprite.get_version())   # (2, 2, 0)
 
     # Upload a model and run inference
     with open("sentinel_god_v3.aif32", "rb") as f:
@@ -86,7 +88,7 @@ with SpriteOne('COM3') as sprite:
     sprite.model_select("sentinel_god_v3.aif32")
 
     info = sprite.model_info()
-    print(info)   # {'name': 'sentinel_god_v3', 'input_count': 128, ...}
+    print(info)   # {'name': 'sentinel_god_v3', 'input_size': 128, ...}
 
     # Graphics
     sprite.clear()
@@ -101,7 +103,7 @@ with SpriteOne('COM3') as sprite:
     # Load the model to train
     sprite.model_select("xor.aif32")
 
-    # Init optimizer (Adam, MSE)
+    # Init Adam optimizer
     sprite.finetune_start(learning_rate=0.01)
 
     # Run training steps (one sample at a time)
@@ -111,7 +113,27 @@ with SpriteOne('COM3') as sprite:
         sprite.finetune_data([0.0, 0.0], [0.0])
         sprite.finetune_data([1.0, 1.0], [0.0])
 
-    sprite.finetune_stop(save=True)
+    sprite.finetune_stop()
+```
+
+### Industrial Primitives
+
+```python
+with SpriteOne('COM3') as sprite:
+    # Board identity
+    dev_id = sprite.get_device_id()
+    assert sprite.ping_id(dev_id)
+
+    # Rolling buffer and delta
+    for sample in sensor_readings:
+        sprite.buffer_write(sample)
+
+    sprite.baseline_capture()
+    # ... acquire new readings ...
+    delta = sprite.get_delta()
+
+    # Pattern match
+    score = sprite.correlate(reference_pattern)
 ```
 
 ---
@@ -123,7 +145,7 @@ Open `webapp/index.html` in Chrome or Edge.
 **Without hardware (Mock Mode):**
 1. Toggle **Mock** in the top-right header
 2. The simulated device appears in the Devices panel
-3. You can upload models, run inference, and train — all in the browser
+3. Upload models, run inference, and train — all in the browser
 
 **With hardware:**
 1. Plug in the Pico via USB
@@ -142,14 +164,31 @@ Open `webapp/index.html` in Chrome or Edge.
 ## Model Conversion (CLI)
 
 ```bash
-# TFLite → .aif32
+# TFLite to .aif32
 python tools/converter/convert.py model.tflite -o output.aif32
 
-# Keras → .aif32 (requires TensorFlow)
+# Keras to .aif32 (requires TensorFlow)
 python tools/converter/convert.py model.h5 -o output.aif32
 
-# Generate reference models (XOR, Sentinel, Vision demo, test models)
+# Generate reference models (xor, sentinel, vision demo, test models)
 python tools/gen_sentinel_model.py
+```
+
+---
+
+## Verification
+
+Run the built-in mock tests to verify the protocol stack without hardware:
+
+```bash
+py tools/mock_device.py --loopback     # CRC + chunked upload
+py tools/mock_device.py --test-api     # Industrial primitives (0xA0-0xA7)
+```
+
+Run against real hardware:
+
+```bash
+py host/python/verify_hardware.py COM3
 ```
 
 ---
@@ -159,10 +198,11 @@ python tools/gen_sentinel_model.py
 | Problem | Check |
 |---|---|
 | Port not found | Device Manager (Windows) or `ls /dev/tty*` (Linux/macOS) |
-| Timeout on command | Different USB cable; try USB-CDC mode if using UART |
+| Timeout on command | Try USB-CDC mode if using UART; check for a stalled firmware upload |
 | `SpriteOneError: no model` | Call `model_select()` or upload a model first |
-| WebSerial not available | Use Chrome or Edge — Firefox and Safari don't support WebSerial |
+| WebSerial not available | Use Chrome or Edge — Firefox and Safari do not support WebSerial |
 | Mock device not showing | Hard-refresh the page (Ctrl+Shift+R) then toggle Mock again |
+| Large model upload fails | Check LittleFS free space; delete unused models first |
 
 ---
 

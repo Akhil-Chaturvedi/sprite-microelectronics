@@ -13,8 +13,8 @@
 #include <stdint.h>
 
 // Version
-#define SPRITE_VERSION_MAJOR 1
-#define SPRITE_VERSION_MINOR 0
+#define SPRITE_VERSION_MAJOR 2
+#define SPRITE_VERSION_MINOR 1
 #define SPRITE_VERSION_PATCH 0
 
 // Protocol Constants

@@ -20,9 +20,10 @@
 #include "sprite_engine.h"
 #include "sprite_model.h"
 #include "sprite_inference.h"
+#include "pico/unique_id.h"
 
 // Enhanced configuration
-#define SPRITE_VERSION "2.1.0-dual"
+#define SPRITE_VERSION "2.1.0"
 #define ENABLE_VERBOSE_LOGGING true
 #define ENABLE_PROGRESS_BARS true
 #define ENABLE_DUAL_CORE true
@@ -70,6 +71,16 @@
 #define CMD_FINETUNE_STOP   0x67
 #define CMD_BATCH           0x70  // Batch command execution
 
+// Industrial API Primitives (0xA0 - 0xA7)
+#define CMD_WHO_IS_THERE    0xA0
+#define CMD_PING_ID         0xA1
+#define CMD_BUFFER_WRITE    0xA2
+#define CMD_BUFFER_SNAPSHOT 0xA3
+#define CMD_BASELINE_CAPTURE 0xA4
+#define CMD_BASELINE_RESET  0xA5
+#define CMD_GET_DELTA       0xA6
+#define CMD_CORRELATE       0xA7
+
 #define RESP_OK             0x00
 #define RESP_ERROR          0x01
 #define RESP_NOT_FOUND      0x02
@@ -114,10 +125,15 @@ void fb_pixel(int16_t x, int16_t y, uint8_t color) {
   fb_mark_dirty(x, y, 1, 1);
 }
 void fb_rect(int16_t x, int16_t y, int16_t w, int16_t h, uint8_t color) {
-  fb_mark_dirty(x, y, w, h);
+  fb_mark_dirty(x, y, w, h);  // mark once for the whole rect
   for (int16_t i = x; i < x + w; i++)
-    for (int16_t j = y; j < y + h; j++)
-      fb_pixel(i, j, color);
+    for (int16_t j = y; j < y + h; j++) {
+      if (i < 0 || i >= DISPLAY_W || j < 0 || j >= DISPLAY_H) continue;
+      uint16_t byte_idx = i + (j / 8) * DISPLAY_W;
+      uint8_t bit = j % 8;
+      if (color) framebuffer[byte_idx] |= (1 << bit);
+      else framebuffer[byte_idx] &= ~(1 << bit);
+    }
 }
 
 // AI Engine
@@ -343,6 +359,38 @@ static uint16_t upload_buffer_pos = 0;
 static uint16_t upload_total_size = 0;
 static char upload_filename[32];
 
+// Industrial Primitive State
+static uint8_t device_id[8];
+static float circular_buffer[60];
+static uint8_t cb_head = 0;
+static uint8_t cb_count = 0;
+static float baseline_mean = 0;
+static bool has_baseline = false;
+
+// Helpers for industrial commands
+float get_buffer_mean() {
+    if (cb_count == 0) return 0;
+    float sum = 0;
+    for (int i = 0; i < cb_count; i++) sum += circular_buffer[i];
+    return sum / cb_count;
+}
+
+float normalized_cross_corr(const float* a, uint8_t a_len, const float* b, uint8_t b_len) {
+    uint8_t len = min(a_len, b_len);
+    if (len == 0) return 0;
+    float mA = 0, mB = 0;
+    for (int i = 0; i < len; i++) { mA += a[i]; mB += b[i]; }
+    mA /= len; mB /= len;
+    float num = 0, dA = 0, dB = 0;
+    for (int i = 0; i < len; i++) {
+        float da = a[i] - mA, db = b[i] - mB;
+        num += da * db; dA += da * da; dB += db * db;
+    }
+    float denom = sqrt(dA * dB);
+    if (denom == 0) return 1.0f;
+    return max(0.0f, min(1.0f, (num / denom + 1.0f) / 2.0f));
+}
+
 // Async FS State
 enum FSState { FS_IDLE, FS_SAVE_PENDING, FS_SAVING, FS_LOAD_PENDING, FS_LOADING };
 static FSState fs_state = FS_IDLE;
@@ -394,59 +442,22 @@ void fs_task() {
   }
   
   if (fs_state == FS_LOAD_PENDING) {
-    if (!LittleFS.exists(fs_filename)) {
-      log_error("Async Load: File not found");
-      fs_state = FS_IDLE;
-      return;
+    if (load_model(fs_filename)) {
+      log_success("Async Load: Success");
+    } else {
+      log_error("Async Load: Failed");
     }
-    fs_file = LittleFS.open(fs_filename, "r");
-    if (!fs_file) {
-      log_error("Async Load: Failed to open");
-      fs_state = FS_IDLE;
-      return;
-    }
-    // Read header
-    ModelHeader h;
-    if (fs_file.read((uint8_t*)&h, sizeof(h)) != sizeof(h)) {
-      log_error("Async Load: Bad header");
-      fs_file.close();
-      fs_state = FS_IDLE;
-      return;
-    }
-    if (h.magic != MODEL_MAGIC) {
-      log_error("Async Load: Invalid magic");
-      fs_file.close();
-      fs_state = FS_IDLE;
-      return;
-    }
-    
-    fs_total_bytes = fs_file.size() - sizeof(h);
-    fs_bytes_processed = 0;
-    fs_state = FS_LOADING;
-    model_ready = false; // Mark not ready during load
-    log_info("Async Load: Started...");
+    fs_state = FS_IDLE;
     return;
   }
   
-  if (fs_state == FS_LOADING) {
-    // Read chunk
-    uint32_t remaining = fs_total_bytes - fs_bytes_processed;
-    uint32_t chunk = min((uint32_t)256, remaining);
-    
-    if (chunk > 0) {
-      fs_file.read(param_mem + fs_bytes_processed, chunk);
-      fs_bytes_processed += chunk;
+  if (fs_state == FS_SAVE_PENDING) {
+    if (save_model(fs_filename)) {
+      log_success("Async Save: Success");
+    } else {
+      log_error("Async Save: Failed");
     }
-    
-    if (fs_bytes_processed >= fs_total_bytes) {
-      fs_file.close();
-      // Verify CRC? (Optional but good)
-      // For now assume success
-      model_ready = true;
-      convert_f32_to_int8(&dense_1, &dense_2);
-      log_success("Async Load: Complete");
-      fs_state = FS_IDLE;
-    }
+    fs_state = FS_IDLE;
     return;
   }
 }
@@ -583,9 +594,15 @@ float do_inference(float in0, float in1) {
       input_vec[1] = in1;
       
       // Inference runs on the Static Arena
-      float* results = dynamic_model.infer(input_vec);
+      float* results;
+      #if ENABLE_DUAL_CORE
+      mutex_enter_blocking(&sprite_lock);
+      #endif
+      results = dynamic_model.infer(input_vec);
+      #if ENABLE_DUAL_CORE
+      mutex_exit(&sprite_lock);
+      #endif
       
-      // Return the first output (Class 0 confidence)
       if (results) return results[0];
       return 0.0f;
   } else {
@@ -596,9 +613,48 @@ float do_inference(float in0, float in1) {
 
 void do_train(uint8_t epochs) {
   ai_state = 1;
-  use_dynamic_model = false; // Disable dynamic model during training (for now)
   
-  log_info("Building neural network...");
+  if (use_dynamic_model && dynamic_model.is_loaded()) {
+    log_info("Training Dynamic Model...");
+    
+    if (!dynamic_model.is_training()) {
+      if (!dynamic_model.prepare_training(0.1f)) {
+        log_error("Failed to initialize dynamic training memory (Arena Full?)");
+        ai_state = 0;
+        return;
+      }
+    }
+    
+    uint16_t in_count = dynamic_model.get_input_count();
+    uint16_t out_count = dynamic_model.get_output_count();
+    
+    if (in_count == 2 && out_count == 1) {
+      log_info("Training on XOR data [2->1]...");
+      for (int i = 0; i < epochs; i++) {
+        float epoch_loss = 0;
+        for (int j = 0; j < 4; j++) {
+          epoch_loss += dynamic_model.train_step(&x_train[j*2], &y_train[j]);
+        }
+        last_loss = epoch_loss / 4;
+        train_epochs++;
+        if (epochs > 20 && (i % (epochs/10) == 0 || i == epochs-1)) {
+          print_progress_bar((i * 100) / epochs, "  ");
+        }
+      }
+    } else {
+      log_error("Dynamic Training: Input/Output mismatch (Expected 2/1 for XOR)");
+      ai_state = 0;
+      return;
+    }
+    
+    log_success("Dynamic Training Complete");
+    ai_state = 0;
+    model_ready = true; // Use common flag for availability
+    return;
+  }
+
+  // Legacy Static Path
+  log_info("Building legacy neural network...");
   build_model();
   init_weights();
   
@@ -622,29 +678,19 @@ void do_train(uint8_t epochs) {
     last_loss = aialgo_train_model(&model, &input, &target, optimizer, 4);
     train_epochs++;
     
-    // Progress updates
     if (epochs > 20 && (i % (epochs/10) == 0 || i == epochs-1)) {
-      uint8_t percent = (i * 100) / epochs;
-      print_progress_bar(percent, "  ");
+      print_progress_bar((i * 100) / epochs, "  ");
     }
   }
   
   uint32_t duration = millis() - start_time;
-  
-  Serial1.print("✓ Training complete in ");
-  Serial1.print(duration);
-  Serial1.print("ms (");
-  Serial1.print(duration / epochs);
-  Serial1.println("ms/epoch)");
-  Serial1.print("  Final loss: ");
-  Serial1.println(last_loss, 6);
+  log_success("Legacy Training Complete");
   
   model_ready = true;
   ai_state = 0;
   
   // Quantize for fast inference
   convert_f32_to_int8(&dense_1, &dense_2);
-  log_info("Model Auto-Quantized to INT8");
 }
 
 bool save_model(const char* filename) {
@@ -700,10 +746,19 @@ bool load_model(const char* filename) {
   f.close();
   
   // Try to load as Dynamic Model
-  if (dynamic_model.load(buffer, size)) {
+  // Try to load as Dynamic Model
+  #if ENABLE_DUAL_CORE
+  mutex_enter_blocking(&sprite_lock);
+  #endif
+  bool ok = dynamic_model.load(buffer, size);
+  #if ENABLE_DUAL_CORE
+  mutex_exit(&sprite_lock);
+  #endif
+  
+  if (ok) {
       log_success("Dynamic Model Loaded Successfully!");
       use_dynamic_model = true;
-      delete[] buffer; // Parser copies what it needs
+      delete[] buffer; 
       return true;
   }
   
@@ -1068,12 +1123,19 @@ void handle_command(uint8_t cmd, const uint8_t* payload, uint8_t len) {
     }
     
     case CMD_AI_STATUS: {
-      uint8_t resp[8];
+      uint8_t resp[12];
       resp[0] = ai_state;
-      resp[1] = model_ready ? 1 : 0;
+      resp[1] = model_ready ? (use_dynamic_model ? 2 : 1) : 0; 
       memcpy(resp + 2, &train_epochs, 2);
       memcpy(resp + 4, &last_loss, 4);
-      send_response(cmd, RESP_OK, resp, 8);
+      
+      // Add dynamic model info if applicable
+      uint16_t in_c = use_dynamic_model ? dynamic_model.get_input_count() : 2;
+      uint16_t out_c = use_dynamic_model ? dynamic_model.get_output_count() : 1;
+      memcpy(resp + 8, &in_c, 2);
+      memcpy(resp + 10, &out_c, 2);
+      
+      send_response(cmd, RESP_OK, resp, 12);
       break;
     }
     
@@ -1239,24 +1301,173 @@ void handle_command(uint8_t cmd, const uint8_t* payload, uint8_t len) {
     }
     
     case CMD_FINETUNE_START: {
-      // Start fine-tuning session on active model
-      // TODO: Implement fine-tuning logic
-      send_response(cmd, RESP_OK, nullptr, 0);
+      float lr = 0.01f;
+      if (len >= 4) memcpy(&lr, payload, 4);
+      
+      bool ok = false;
+      if (use_dynamic_model && dynamic_model.is_loaded()) {
+        #if ENABLE_DUAL_CORE
+        mutex_enter_blocking(&sprite_lock);
+        #endif
+        ok = dynamic_model.prepare_training(lr);
+        #if ENABLE_DUAL_CORE
+        mutex_exit(&sprite_lock);
+        #endif
+      } else if (model_ready) {
+        // Prepare legacy model for training
+        aiopti_adam_f32_t adam = AIOPTI_ADAM_F32(lr, 0.9f, 0.999f, 1e-7);
+        aiopti_t *optimizer = aiopti_adam_f32_default(&adam);
+        aialgo_schedule_training_memory(&model, optimizer, train_mem, sizeof(train_mem));
+        aialgo_init_model_for_training(&model, optimizer);
+        ok = true;
+      }
+      send_response(cmd, ok ? RESP_OK : RESP_ERROR, nullptr, 0);
       break;
     }
     
     case CMD_FINETUNE_DATA: {
-      // Send training sample(s) for fine-tuning
-      // Payload: num_samples(1) [input_data output_data]+
-      // TODO: Implement incremental training
-      send_response(cmd, RESP_OK, nullptr, 0);
+      if (len == 0) { send_response(cmd, RESP_ERROR, nullptr, 0); break; }
+      
+      bool ok = false;
+      if (use_dynamic_model && dynamic_model.is_loaded()) {
+        uint16_t in_c = dynamic_model.get_input_count();
+        uint16_t out_c = dynamic_model.get_output_count();
+        if (len >= (in_c + out_c) * 4) {
+          float* sample_in = (float*)payload;
+          float* sample_tar = (float*)(payload + in_c * 4);
+          
+          #if ENABLE_DUAL_CORE
+          mutex_enter_blocking(&sprite_lock);
+          #endif
+          last_loss = dynamic_model.train_step(sample_in, sample_tar);
+          #if ENABLE_DUAL_CORE
+          mutex_exit(&sprite_lock);
+          #endif
+          train_epochs++;
+          ok = true;
+        }
+      } else if (model_ready) {
+        // Legacy incremental training (simplified)
+        if (len >= 12) { // 2 inputs, 1 output for XOR
+           uint16_t x_shape[] = {1, 2}, y_shape[] = {1, 1};
+           aitensor_t in_t = AITENSOR_2D_F32(x_shape, (float*)payload);
+           aitensor_t tar_t = AITENSOR_2D_F32(y_shape, (float*)(payload + 8));
+           
+           // We need current optimizer. In legacy path, we recreate it if needed
+           // but normally START should have set it up.
+           // For simplicity, we reuse the ADAM settings.
+           aiopti_adam_f32_t adam = AIOPTI_ADAM_F32(0.01f, 0.9f, 0.999f, 1e-7);
+           aiopti_t *opti = aiopti_adam_f32_default(&adam);
+           aialgo_schedule_training_memory(&model, opti, train_mem, sizeof(train_mem));
+           
+           last_loss = aialgo_train_model(&model, &in_t, &tar_t, opti, 1);
+           train_epochs++;
+           ok = true;
+        }
+      }
+      send_response(cmd, ok ? RESP_OK : RESP_ERROR, (uint8_t*)&last_loss, 4);
       break;
     }
     
     case CMD_FINETUNE_STOP: {
-      // End fine-tuning session, save updated weights
-      // TODO: Save fine-tuned model
+      if (use_dynamic_model) {
+        // Dynamic model training state clean up? 
+        // AIfES doesn't strictly need it, but we can reset the flag.
+      }
       send_response(cmd, RESP_OK, nullptr, 0);
+      break;
+    }
+
+    // ===== Industrial API Primitives =====
+    
+    case CMD_WHO_IS_THERE: {
+      send_response(cmd, RESP_OK, device_id, 8);
+      break;
+    }
+    
+    case CMD_PING_ID: {
+      if (len >= 8 && memcmp(payload, device_id, 8) == 0) {
+        send_response(cmd, RESP_OK, nullptr, 0);
+      } else {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+      }
+      break;
+    }
+    
+    case CMD_BUFFER_WRITE: {
+      if (len >= 4) {
+        float val;
+        memcpy(&val, payload, 4);
+        circular_buffer[cb_head] = val;
+        cb_head = (cb_head + 1) % 60;
+        if (cb_count < 60) cb_count++;
+        send_response(cmd, RESP_OK, nullptr, 0);
+      } else {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+      }
+      break;
+    }
+    
+    case CMD_BUFFER_SNAPSHOT: {
+      if (cb_count == 0) {
+        send_response(cmd, RESP_OK, nullptr, 0);
+      } else {
+        // Pack into ordered array (oldest to newest)
+        float snapshot[60];
+        for (int i = 0; i < cb_count; i++) {
+          uint8_t idx = (cb_head - cb_count + i + 60) % 60;
+          snapshot[i] = circular_buffer[idx];
+        }
+        send_response(cmd, RESP_OK, (uint8_t*)snapshot, cb_count * 4);
+      }
+      break;
+    }
+    
+    case CMD_BASELINE_CAPTURE: {
+      if (cb_count > 0) {
+        baseline_mean = get_buffer_mean();
+        has_baseline = true;
+        send_response(cmd, RESP_OK, (uint8_t*)&baseline_mean, 4);
+      } else {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+      }
+      break;
+    }
+    
+    case CMD_BASELINE_RESET: {
+      has_baseline = false;
+      send_response(cmd, RESP_OK, nullptr, 0);
+      break;
+    }
+    
+    case CMD_GET_DELTA: {
+      if (has_baseline && cb_count > 0) {
+        float delta = fabs(get_buffer_mean() - baseline_mean);
+        send_response(cmd, RESP_OK, (uint8_t*)&delta, 4);
+      } else {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+      }
+      break;
+    }
+    
+    case CMD_CORRELATE: {
+      if (len >= 4 && cb_count > 0) {
+        uint8_t ref_count = len / 4;
+        if (ref_count > 60) ref_count = 60;
+        float ref[60];
+        memcpy(ref, payload, ref_count * 4);
+        
+        float snapshot[60];
+        for (int i = 0; i < cb_count; i++) {
+          uint8_t idx = (cb_head - cb_count + i + 60) % 60;
+          snapshot[i] = circular_buffer[idx];
+        }
+        
+        float score = normalized_cross_corr(snapshot, cb_count, ref, ref_count);
+        send_response(cmd, RESP_OK, (uint8_t*)&score, 4);
+      } else {
+        send_response(cmd, RESP_ERROR, nullptr, 0);
+      }
       break;
     }
     
@@ -1388,6 +1599,11 @@ void setup() {
   mutex_init(&sprite_lock);
   #endif
   delay(2000);
+  
+  // Initialize hardware ID
+  pico_unique_board_id_t id;
+  pico_get_unique_board_id(&id);
+  memcpy(device_id, id.id, 8);
   
   randomSeed(analogRead(A0));
   

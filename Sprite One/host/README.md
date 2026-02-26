@@ -7,14 +7,15 @@ Host-side libraries for controlling Sprite One from a PC or embedded MCU.
 ```
 host/
 ├── python/
-│   ├── sprite_one.py     # Main library
-│   ├── examples.py       # Usage examples
-│   ├── test_suite.py     # Integration tests
-│   ├── unit_tests.py     # Unit tests for protocol layer
-│   └── requirements.txt  # pyserial
+│   ├── sprite_one.py      # Main library
+│   ├── examples.py        # Usage examples
+│   ├── verify_hardware.py # End-to-end hardware verification script
+│   ├── test_suite.py      # Integration tests (requires hardware)
+│   ├── unit_tests.py      # Unit tests (no hardware needed)
+│   └── requirements.txt   # pyserial
 └── c/
-    ├── sprite_one.h      # Header
-    └── sprite_one.c      # Implementation
+    ├── sprite_one.h       # Header
+    └── sprite_one.c       # Implementation
 ```
 
 ---
@@ -41,23 +42,33 @@ pip install -r requirements.txt   # installs pyserial
 - `flush()` — push framebuffer to OLED
 
 **AI — Inference**
-- `ai_infer(in0, in1)` → `float` — run inference (legacy 2-in API)
-- `ai_status()` → `dict` — `{state, model_loaded, epochs, last_loss}`
+- `ai_infer(in0, in1)` → `float` — forward pass, legacy 2-input signature
+- `ai_status()` → `dict` — state, model_type, epochs, last_loss, input_dim, output_dim
 
-**Model Management** (dynamic models, V3 format)
-- `model_info()` → `dict` — active model metadata
+**Model Management** (V3 dynamic models)
+- `model_info()` → `dict | None` — active model metadata
 - `model_list()` → `list[str]` — models stored in flash
 - `model_select(filename)` — load a stored model
 - `model_upload(filename, data)` — upload `.aif32` to device flash
 - `model_delete(filename)` — delete from flash
 
 **On-Device Training**
-- `finetune_start(learning_rate=0.01)` — init Adam optimizer + MSE loss
+- `finetune_start(learning_rate=0.01)` — allocate optimizer memory
 - `finetune_data(inputs, targets)` → `float` loss — one training step
-- `finetune_stop(save=True)` — end session, optionally persist weights
+- `finetune_stop()` — end session
 
-**File operations (legacy)**
-- `ai_save(filename)` / `ai_load(filename)` — save/load hardcoded model slot
+**Industrial API Primitives**
+- `get_device_id()` → `bytes` — 8-byte board-unique ID
+- `ping_id(id_bytes)` → `bool` — ID match check
+- `buffer_write(value)` — push one float32 into circular buffer (max 60)
+- `buffer_snapshot()` → `list[float]` — ordered buffer contents
+- `baseline_capture()` → `float` — freeze buffer mean as baseline
+- `baseline_reset()` — clear baseline
+- `get_delta()` → `float` — abs(live_mean - baseline)
+- `correlate(ref_data)` → `float` — normalized cross-correlation [0.0, 1.0]
+
+**Legacy file operations**
+- `ai_save(filename)` / `ai_load(filename)` — save/load the static model slot
 - `ai_list_models()` / `ai_delete(filename)`
 
 See [docs/API.md](../docs/API.md) for full signatures and examples.
@@ -66,7 +77,7 @@ See [docs/API.md](../docs/API.md) for full signatures and examples.
 
 ## C Library
 
-Platform-agnostic — provide three I/O function pointers at init time.
+Platform-agnostic. Provide three I/O function pointers at init time.
 
 ```c
 #include "sprite_one.h"

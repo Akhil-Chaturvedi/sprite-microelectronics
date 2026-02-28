@@ -13,3 +13,13 @@ UART-based graphics and AI accelerator for embedded systems. Built on RP2040.
 **Interface:** UART at 115200 baud
 
 See `Sprite One/` directory for complete documentation.
+
+### [Sprite Two](https://github.com/Akhil-Chaturvedi/sprite-two/tree/a1eb69a9c1b9a73171ae26ff60738a21451044ce)
+
+An ultra-low-power RISC-V SoC that unifies 8 processor types in one open-source 130nm chip.
+
+**Status:** Pre-tapeout architecture definition  
+**Use case:** Tri-domain power-gated heterogeneous acceleration for predictive maintenance and edge-vision   
+**Interconnect:** Universal Stream Router + 128-bit Wishbone
+
+See `Sprite Two/` directory for complete documentation.

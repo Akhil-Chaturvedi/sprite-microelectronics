@@ -14,7 +14,7 @@ UART-based graphics and AI accelerator for embedded systems. Built on RP2040.
 
 See `Sprite One/` directory for complete documentation.
 
-### [Sprite Two](https://github.com/Akhil-Chaturvedi/sprite-two/tree/a1eb69a9c1b9a73171ae26ff60738a21451044ce)
+### [Sprite Two](https://github.com/Akhil-Chaturvedi/sprite-two)
 
 An ultra-low-power RISC-V SoC that unifies 8 processor types in one open-source 130nm chip.
 
